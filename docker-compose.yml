@@ -1,0 +1,24 @@
+services:
+  messagedb:
+    image: postgres
+    restart: always
+    # set shared memory using docker compose
+    shm_size: 256mb
+    container_name: chat_video_container_db
+    environment:
+      POSTGRES_USER: chat_video_USER
+      POSTGRES_PASSWORD: password@12
+      POSTGRES_DB: chat_video_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat_video_USER -d chat_video_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+    driver: local
