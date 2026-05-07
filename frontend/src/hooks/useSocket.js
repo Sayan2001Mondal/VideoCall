@@ -4,7 +4,7 @@ export default function useSocket(onMessage) {
   const ws = useRef(null);
 
   useEffect(() => {
-    ws.current = new WebSocket("wss://sayanexpress.superfastmind.com/ws/test");
+    ws.current = new WebSocket("ws://192.168.0.166:5000/ws/test");
 
     ws.current.onopen = () => {
       console.log("Connected to server");

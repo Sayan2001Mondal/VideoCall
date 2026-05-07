@@ -1,64 +1,97 @@
 "use client";
 
-import useWebRTC from "../hooks/useWebRTC";
+import useMediaSoup from "../hooks/useMediaSoup";
+import { useRef, useEffect } from "react";
 
-export default function VideoCall({ ws, roomId }) {
- const { localVideoRef, remoteVideoRef, startCall, toggleMic, toggleCam, micOn, camOn, switchCamera } =
-    useWebRTC(ws, roomId);
+function RemoteVideo({ stream, peerId, name }) {
+  const videoRef = useRef(null);
+
+  useEffect(() => {
+    if (!videoRef.current || !stream) return;
+
+    console.log("REMOTE STREAM:", stream);
+
+    console.log(
+      "REMOTE TRACKS:",
+      stream.getTracks()
+    );
+
+    videoRef.current.srcObject = stream;
+
+    const playVideo = async () => {
+      try {
+        await videoRef.current.play();
+
+        console.log("REMOTE VIDEO PLAYING");
+      } catch (err) {
+        console.error("VIDEO PLAY ERROR:", err);
+      }
+    };
+
+    videoRef.current.onloadedmetadata = () => {
+      console.log("METADATA LOADED");
+
+      playVideo();
+    };
+
+    playVideo();
+
+  }, [stream]);
+
+  return (
+    <div style={styles.videoBox}>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={false}
+        controls={false}
+        style={styles.video}
+      />
+
+      <span style={styles.label}>
+        {name || peerId}
+      </span>
+    </div>
+  );
+}
+
+export default function VideoCall({ ws, roomId, peerId, name }) {
+  const { localVideoRef, remoteStreams, peersData, micOn, camOn, toggleMic, toggleCam, switchCamera } =
+    useMediaSoup(ws, roomId, peerId, name);
 
   return (
     <div style={styles.wrapper}>
-
-      {/* Video grid */}
       <div style={styles.videoGrid}>
-        <div style={styles.videoBox}>
-          <video ref={remoteVideoRef} autoPlay playsInline style={styles.video} />
-          <span style={styles.label}>Remote</span>
-        </div>
+        {/* Local */}
         <div style={styles.videoBox}>
           <video ref={localVideoRef} autoPlay muted playsInline style={styles.video} />
           {!camOn && <div style={styles.camOff}>Camera off</div>}
           <span style={styles.label}>You</span>
         </div>
+
+        {/* Remote peers */}
+        {Object.entries(remoteStreams).map(([pid, stream]) => (
+          <RemoteVideo key={pid} stream={stream} peerId={pid} name={peersData[pid]?.name} />
+        ))}
       </div>
 
-      {/* Controls */}
       <div style={styles.controls}>
-        <button
-          onClick={toggleMic}
-          style={{ ...styles.ctrlBtn, background: micOn ? "#334155" : "#ef4444" }}
-          aria-label="Toggle microphone"
-        >
+        <button onClick={toggleMic} style={{ ...styles.ctrlBtn, background: micOn ? "#334155" : "#ef4444" }} aria-label="Toggle mic">
           {micOn ? <MicIcon /> : <MicOffIcon />}
         </button>
-
-        <button
-          onClick={toggleCam}
-          style={{ ...styles.ctrlBtn, background: camOn ? "#334155" : "#ef4444" }}
-          aria-label="Toggle camera"
-        >
+        <button onClick={toggleCam} style={{ ...styles.ctrlBtn, background: camOn ? "#334155" : "#ef4444" }} aria-label="Toggle camera">
           {camOn ? <CamIcon /> : <CamOffIcon />}
         </button>
-
-        <button
-  onClick={switchCamera}
-  style={{ ...styles.ctrlBtn, background: "#334155" }}
-  aria-label="Switch camera"
->
-  <SwitchCamIcon />
-</button>
-
-        <button
-          onClick={startCall}
-          style={{ ...styles.ctrlBtn, background: "#22c55e", width: 56, height: 56 }}
-          aria-label="Start call"
-        >
-          <CallIcon />
+        <button onClick={switchCamera} style={{ ...styles.ctrlBtn, background: "#334155" }} aria-label="Switch camera">
+          <SwitchCamIcon />
         </button>
       </div>
     </div>
   );
 }
+
+// styles and icons same as before — copy from your existing VideoCall.jsx
 
 const styles = {
   wrapper: {
