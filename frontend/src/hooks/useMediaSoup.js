@@ -1,19 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import * as mediasoupClient from "mediasoup-client";
 
-export default function useMediaSoup(ws, roomId, peerId, name) {
+export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef) {
   const deviceRef = useRef(null);
   const sendTransportRef = useRef(null);
   const recvTransportRef = useRef(null);
-  const producersRef = useRef({});         // local producers
-  const consumersRef = useRef({});         // remote consumers
+  const producersRef = useRef({});
+  const consumersRef = useRef({});
   const localStreamRef = useRef(null);
 
   const localVideoRef = useRef(null);
-  const [remoteStreams, setRemoteStreams] = useState({}); // { peerId: MediaStream }
-  const [peersData, setPeersData] = useState({}); // { peerId: { name } }
+  const [remoteStreams, setRemoteStreams] = useState({});
+  const [peersData, setPeersData] = useState({});
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
+  const [screenShareOn, setScreenShareOn] = useState(false);
+  const [screenStream, setScreenStream] = useState(null);
 
   // ── helpers ────────────────────────────────────────────────────
   function send(data) {
@@ -48,7 +50,6 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
 
     transport.on("connect", ({ dtlsParameters }, cb, eb) => {
       send({ type: "connectTransport", roomId, peerId, transportId: transport.id, dtlsParameters });
-      // wait for server ack
       const h = (e) => {
         const m = JSON.parse(e.data);
         if (m.type === "transportConnected" && m.transportId === transport.id) {
@@ -59,8 +60,16 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
       ws.current.addEventListener("message", h);
     });
 
-    transport.on("produce", ({ kind, rtpParameters }, cb, eb) => {
-      send({ type: "produce", roomId, peerId, transportId: transport.id, kind, rtpParameters });
+    transport.on("produce", ({ kind, rtpParameters, appData }, cb, eb) => {
+      send({
+        type: "produce",
+        roomId,
+        peerId,
+        transportId: transport.id,
+        kind,
+        rtpParameters,
+        isScreenShare: appData?.isScreenShare || false,
+      });
       const h = (e) => {
         const m = JSON.parse(e.data);
         if (m.type === "produced") {
@@ -92,85 +101,64 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
     recvTransportRef.current = transport;
   }
 
-  async function consumeProducer(producerId, sourcePeerId) {
-  if (!deviceRef.current || !recvTransportRef.current) {
-    console.log("Device or recv transport missing");
-    return;
-  }
+  async function consumeProducer(producerId, sourcePeerId, isScreenShare = false) {
+    if (!deviceRef.current || !recvTransportRef.current) {
+      console.log("Device or recv transport missing");
+      return;
+    }
 
-  console.log("Requesting consume for producer:", producerId);
+    console.log("Requesting consume for producer:", producerId, "screenShare:", isScreenShare);
 
-  send({
-    type: "consume",
-    roomId,
-    peerId,
-    producerId,
-    rtpCapabilities: deviceRef.current.rtpCapabilities,
-  });
+    send({
+      type: "consume",
+      roomId,
+      peerId,
+      producerId,
+      rtpCapabilities: deviceRef.current.rtpCapabilities,
+    });
 
-  return new Promise((resolve) => {
-    const h = async (e) => {
-      const m = JSON.parse(e.data);
+    return new Promise((resolve) => {
+      const h = async (e) => {
+        const m = JSON.parse(e.data);
 
-      if (
-        m.type === "consumed" &&
-        m.producerId === producerId
-      ) {
-        ws.current.removeEventListener("message", h);
+        if (m.type === "consumed" && m.producerId === producerId) {
+          ws.current.removeEventListener("message", h);
 
-        console.log("Consumed event received:", m);
-
-        try {
-          const consumer =
-            await recvTransportRef.current.consume({
+          try {
+            const consumer = await recvTransportRef.current.consume({
               id: m.consumerId,
               producerId: m.producerId,
               kind: m.kind,
               rtpParameters: m.rtpParameters,
             });
 
-          console.log("Consumer created:", consumer);
+            consumersRef.current[consumer.id] = consumer;
+            await consumer.resume?.();
 
-          consumersRef.current[consumer.id] = consumer;
+            const streamKey = isScreenShare ? `${sourcePeerId}-screen` : sourcePeerId;
 
-          // Resume consumer
-          await consumer.resume?.();
+            setRemoteStreams((prev) => {
+              const existing = prev[streamKey] || new MediaStream();
+              const newStream = new MediaStream(existing.getTracks());
 
-          console.log(
-            "Consumer track:",
-            consumer.track
-          );
+              const alreadyExists = newStream.getTracks().some((t) => t.id === consumer.track.id);
+              if (!alreadyExists) {
+                newStream.addTrack(consumer.track);
+              }
 
-          setRemoteStreams((prev) => {
-            const existing = prev[sourcePeerId] || new MediaStream();
-            
-            // Create a completely new MediaStream reference to force React to re-render
-            const newStream = new MediaStream(existing.getTracks());
-            
-            // Prevent duplicate tracks
-            const alreadyExists = newStream.getTracks().some((t) => t.id === consumer.track.id);
-            if (!alreadyExists) {
-              newStream.addTrack(consumer.track);
-            }
+              return { ...prev, [streamKey]: newStream };
+            });
 
-            console.log("UPDATED STREAM TRACKS:", newStream.getTracks());
-
-            return {
-              ...prev,
-              [sourcePeerId]: newStream,
-            };
-          });
-
-          resolve(consumer);
-        } catch (err) {
-          console.error("Consume error:", err);
+            resolve(consumer);
+          } catch (err) {
+            console.error("Consume error:", err);
+          }
         }
-      }
-    };
+      };
 
-    ws.current.addEventListener("message", h);
-  });
-}
+      ws.current.addEventListener("message", h);
+    });
+  }
 
   // ── main init ──────────────────────────────────────────────────
   useEffect(() => {
@@ -179,7 +167,6 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
     let cleanedUp = false;
 
     async function init() {
-      // Wait for router caps
       const rtpCapabilities = await new Promise((resolve) => {
         const h = (e) => {
           const m = JSON.parse(e.data);
@@ -196,7 +183,6 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
 
       const device = await loadDevice(rtpCapabilities);
 
-      // Create both transports in parallel
       const [sendOpts, recvOpts] = await Promise.all([
         createTransport("send"),
         createTransport("recv"),
@@ -205,47 +191,50 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
       await setupSendTransport(device, sendOpts);
       await setupRecvTransport(device, recvOpts);
 
-      // Get local media
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
+      let stream;
+      if (existingStreamRef?.current) {
+        stream = existingStreamRef.current;
+      } else {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+          });
+        } catch (err) {
+          console.warn("Could not get user media:", err);
+          stream = new MediaStream();
+        }
+      }
 
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-      // Produce audio + video
       const audioTrack = stream.getAudioTracks()[0];
       const videoTrack = stream.getVideoTracks()[0];
 
-      const audioProducer = await sendTransportRef.current.produce({ track: audioTrack });
-      const videoProducer = await sendTransportRef.current.produce({ track: videoTrack });
+      if (audioTrack) {
+        const audioProducer = await sendTransportRef.current.produce({ track: audioTrack });
+        producersRef.current.audio = audioProducer;
+      }
 
-      producersRef.current.audio = audioProducer;
-      producersRef.current.video = videoProducer;
-
-      // getProducers is sent in initAndListen() after messageHandler is
-      // registered, so that the response is always processed with a ready
-      // recv transport. Do NOT send it here.
+      if (videoTrack) {
+        const videoProducer = await sendTransportRef.current.produce({ track: videoTrack });
+        producersRef.current.video = videoProducer;
+      }
     }
 
-    // messageHandler is registered AFTER init() so that recvTransportRef is
-    // guaranteed to be set by the time any newProducer / existingProducers
-    // message is processed. Previously it was registered before init(), which
-    // meant a newProducer arriving mid-setup would hit the early-return guard
-    // in consumeProducer and silently drop the remote stream forever.
     const messageHandler = async (e) => {
       const msg = JSON.parse(e.data);
 
       if (msg.type === "newProducer") {
         setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name } }));
-        await consumeProducer(msg.producerId, msg.peerId);
+        await consumeProducer(msg.producerId, msg.peerId, msg.isScreenShare);
       }
 
       if (msg.type === "existingProducers") {
-        for (const { producerId, peerId: sourcePeerId, name: sourceName } of msg.producers) {
+        for (const { producerId, peerId: sourcePeerId, name: sourceName, isScreenShare } of msg.producers) {
           setPeersData((prev) => ({ ...prev, [sourcePeerId]: { name: sourceName } }));
-          await consumeProducer(producerId, sourcePeerId);
+          await consumeProducer(producerId, sourcePeerId, isScreenShare);
         }
       }
 
@@ -253,6 +242,7 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
         setRemoteStreams((prev) => {
           const updated = { ...prev };
           delete updated[msg.peerId];
+          delete updated[`${msg.peerId}-screen`];
           return updated;
         });
         setPeersData((prev) => {
@@ -265,14 +255,19 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
       if (msg.type === "peerJoined") {
         setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name } }));
       }
+
+      if (msg.type === "screenShareStopped") {
+        setRemoteStreams((prev) => {
+          const updated = { ...prev };
+          delete updated[`${msg.peerId}-screen`];
+          return updated;
+        });
+      }
     };
 
     async function initAndListen() {
       await init();
       if (cleanedUp) return;
-      // Register handler only after transports are ready, then ask for
-      // existing producers. Any newProducer that arrives from this point
-      // forward will find recvTransportRef already populated.
       ws.current.addEventListener("message", messageHandler);
       send({ type: "getProducers", roomId, peerId });
     }
@@ -284,29 +279,31 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
       ws.current?.removeEventListener("message", messageHandler);
       sendTransportRef.current?.close();
       recvTransportRef.current?.close();
-      localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      if (!existingStreamRef?.current) {
+        localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      }
       send({ type: "leave", roomId, peerId });
     };
   }, [roomId, peerId]);
 
   // ── toggles ────────────────────────────────────────────────────
-  const toggleMic = () => {
+  const toggleMic = useCallback(() => {
     const producer = producersRef.current.audio;
     if (!producer) return;
     if (micOn) producer.pause(); else producer.resume();
     localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !micOn));
     setMicOn((v) => !v);
-  };
+  }, [micOn]);
 
-  const toggleCam = () => {
+  const toggleCam = useCallback(() => {
     const producer = producersRef.current.video;
     if (!producer) return;
     if (camOn) producer.pause(); else producer.resume();
     localStreamRef.current?.getVideoTracks().forEach((t) => (t.enabled = !camOn));
     setCamOn((v) => !v);
-  };
+  }, [camOn]);
 
-  const switchCamera = async () => {
+  const switchCamera = useCallback(async () => {
     const producer = producersRef.current.video;
     if (!producer || !localStreamRef.current) return;
 
@@ -327,7 +324,72 @@ export default function useMediaSoup(ws, roomId, peerId, name) {
     localStreamRef.current.addTrack(newTrack);
 
     if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-  };
+  }, []);
 
-  return { localVideoRef, remoteStreams, peersData, micOn, camOn, toggleMic, toggleCam, switchCamera };
+  // ── screen sharing ────────────────────────────────────────────
+
+  // ✅ stopScreenShare declared first so startScreenShare can reference it
+  const stopScreenShare = useCallback(() => {
+    const producer = producersRef.current.screen;
+    if (producer) {
+      producer.close();
+      delete producersRef.current.screen;
+    }
+
+    setScreenShareOn(false);
+    setScreenStream(null);
+
+    send({ type: "screenShareStopped", roomId, peerId });
+  }, [roomId, peerId]);
+
+  const startScreenShare = useCallback(async () => {
+    if (!sendTransportRef.current) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { cursor: "always", displaySurface: "monitor" },
+        audio: false,
+      });
+
+      const screenTrack = stream.getVideoTracks()[0];
+
+      const screenProducer = await sendTransportRef.current.produce({
+        track: screenTrack,
+        appData: { isScreenShare: true },
+      });
+
+      producersRef.current.screen = screenProducer;
+      setScreenShareOn(true);
+      setScreenStream(stream);
+
+      screenTrack.onended = () => {
+        stopScreenShare(); // ✅ in scope now
+      };
+    } catch (err) {
+      console.log("Screen share cancelled or error:", err);
+    }
+  }, [stopScreenShare]); // ✅ stopScreenShare in deps
+
+  const toggleScreenShare = useCallback(() => {
+    if (screenShareOn) {
+      stopScreenShare();
+    } else {
+      startScreenShare();
+    }
+  }, [screenShareOn, startScreenShare, stopScreenShare]);
+
+  return {
+    localVideoRef,
+    localStreamRef,
+    remoteStreams,
+    peersData,
+    micOn,
+    camOn,
+    screenShareOn,
+    screenStream,
+    toggleMic,
+    toggleCam,
+    switchCamera,
+    toggleScreenShare,
+  };
 }

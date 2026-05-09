@@ -66,7 +66,12 @@ function socketHandler(ws) {
           Object.entries(room.peers).forEach(([id, peer]) => {
             if (id !== peerId) {
               Object.values(peer.producers).forEach((producer) => {
-                existingProducers.push({ producerId: producer.id, peerId: id, name: peer.name });
+                existingProducers.push({
+                  producerId: producer.id,
+                  peerId: id,
+                  name: peer.name,
+                  isScreenShare: producer.appData?.isScreenShare || false,
+                });
               });
             }
           });
@@ -118,12 +123,16 @@ function socketHandler(ws) {
 
         // ─── PRODUCE ────────────────────────────────────────────
         case "produce": {
-          const { roomId, peerId, transportId, kind, rtpParameters } = data;
+          const { roomId, peerId, transportId, kind, rtpParameters, isScreenShare } = data;
           const peer = getPeer(roomId, peerId);
           const transport = peer?.transports[transportId];
           if (!transport) return;
 
-          const producer = await transport.produce({ kind, rtpParameters });
+          const producer = await transport.produce({
+            kind,
+            rtpParameters,
+            appData: { isScreenShare: isScreenShare || false },
+          });
           peer.producers[producer.id] = producer;
 
           send(ws, { type: "produced", producerId: producer.id, kind });
@@ -135,6 +144,7 @@ function socketHandler(ws) {
             peerId,
             name: peer.name,
             kind,
+            isScreenShare: isScreenShare || false,
           });
           break;
         }
@@ -219,10 +229,16 @@ function socketHandler(ws) {
         // ─── CHAT ───────────────────────────────────────────────
         case "chat": {
           const { roomId, peerId, message, sender } = data;
-          const room = getRoom(roomId);
-          if (!room) return;
-          Object.values(room.peers).forEach((peer) => {
-            send(peer.ws, { type: "chat", message, sender });
+          broadcast(roomId, peerId, { type: "chat", message, sender });
+          break;
+        }
+
+        // ─── SCREEN SHARE STOPPED ────────────────────────────────
+        case "screenShareStopped": {
+          const { roomId, peerId } = data;
+          broadcast(roomId, peerId, {
+            type: "screenShareStopped",
+            peerId,
           });
           break;
         }

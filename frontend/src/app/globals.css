@@ -1,35 +1,104 @@
-body {
+@import "tailwindcss";
+
+/* ────────────────────────────────────────────────────────────────
+   THEME — built from #9d00ff
+   ──────────────────────────────────────────────────────────────── */
+@theme {
+  /* Primary purple palette */
+  --color-primary-50: #f3e8ff;
+  --color-primary-100: #e4ccff;
+  --color-primary-200: #c999ff;
+  --color-primary-300: #ae66ff;
+  --color-primary-400: #b433ff;
+  --color-primary-500: #9d00ff;
+  --color-primary-600: #8400d9;
+  --color-primary-700: #6b00b3;
+  --color-primary-800: #52008c;
+  --color-primary-900: #390066;
+
+  /* Surface / background colors (dark purple-tinted) */
+  --color-surface-50: #f8f5ff;
+  --color-surface-100: #1e1b2e;
+  --color-surface-200: #19172a;
+  --color-surface-300: #141222;
+  --color-surface-400: #0f0d1a;
+  --color-surface-500: #0b0a14;
+  --color-surface-600: #080710;
+
+  /* Semantic */
+  --color-danger: #ef4444;
+  --color-danger-hover: #dc2626;
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+
+  /* Fonts */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   BASE RESET
+   ──────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
   margin: 0;
-  font-family: system-ui, sans-serif;
-  background: #0f172a; /* dark blue */
-  color: white;
+  padding: 0;
 }
 
-.container {
-  max-width: 600px;
-  margin: 50px auto;
-  background: #1e293b;
-  padding: 20px;
-  border-radius: 12px;
+html,
+body {
+  height: 100%;
+  font-family: var(--font-sans);
+  background: var(--color-surface-500);
+  color: #e2e0f0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-input {
-  padding: 10px;
-  margin: 5px;
-  border-radius: 8px;
-  border: none;
-  outline: none;
+/* ────────────────────────────────────────────────────────────────
+   SCROLLBAR (thin, themed)
+   ──────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-primary-700);
+  border-radius: 999px;
 }
 
-button {
-  padding: 10px 16px;
-  border-radius: 8px;
-  border: none;
-  background: #3b82f6;
-  color: white;
-  cursor: pointer;
+/* ────────────────────────────────────────────────────────────────
+   ANIMATIONS
+   ──────────────────────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
-button:hover {
-  background: #2563eb;
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+@keyframes slideOutRight {
+  from { transform: translateX(0); }
+  to   { transform: translateX(100%); }
+}
+
+@keyframes pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.5; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+
+@keyframes speaking-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(157, 0, 255, 0); }
+  50%      { box-shadow: 0 0 0 4px rgba(157, 0, 255, 0.4); }
 }

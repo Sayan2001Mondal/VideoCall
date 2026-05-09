@@ -1,210 +1,312 @@
 "use client";
 
+import { useState, useEffect, useCallback, useRef } from "react";
 import useMediaSoup from "../hooks/useMediaSoup";
-import { useRef, useEffect } from "react";
+import VideoTile from "./VideoTile";
+import ControlBar from "./ControlBar";
+import ChatBox from "./ChatBox";
+import MessageInput from "./MessageInput";
+import ParticipantsList from "./ParticipantsList";
 
-function RemoteVideo({ stream, peerId, name }) {
-  const videoRef = useRef(null);
+export default function VideoCall({
+  ws,
+  roomId,
+  peerId,
+  name,
+  existingStreamRef,
+  initialMicOn = true,
+  initialCamOn = true,
+  messages = [],
+  onSendMessage,
+  onLeave,
+}) {
+  const {
+    localVideoRef,
+    remoteStreams,
+    peersData,
+    micOn,
+    camOn,
+    screenShareOn,
+    screenStream,
+    toggleMic,
+    toggleCam,
+    switchCamera,
+    toggleScreenShare,
+  } = useMediaSoup(ws, roomId, peerId, name, existingStreamRef);
 
+  const [chatOpen, setChatOpen] = useState(false);
+  const [participantsOpen, setParticipantsOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const prevMsgCount = useRef(messages.length);
+
+  // Track unread messages when chat is closed
   useEffect(() => {
-    if (!videoRef.current || !stream) return;
+    if (!chatOpen && messages.length > prevMsgCount.current) {
+      setUnreadCount((c) => c + (messages.length - prevMsgCount.current));
+    }
+    prevMsgCount.current = messages.length;
+  }, [messages.length, chatOpen]);
 
-    console.log("REMOTE STREAM:", stream);
+  // Meeting timer
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsedTime((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
-    console.log(
-      "REMOTE TRACKS:",
-      stream.getTracks()
-    );
+  // Keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.altKey && e.key === "m") { e.preventDefault(); toggleMic(); }
+      if (e.altKey && e.key === "v") { e.preventDefault(); toggleCam(); }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [toggleMic, toggleCam]);
 
-    videoRef.current.srcObject = stream;
+  const formatTime = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  };
 
-    const playVideo = async () => {
-      try {
-        await videoRef.current.play();
+  const copyRoomId = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(roomId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback
+    }
+  }, [roomId]);
 
-        console.log("REMOTE VIDEO PLAYING");
-      } catch (err) {
-        console.error("VIDEO PLAY ERROR:", err);
-      }
-    };
+  // ✅ Clear unread inline when opening — no effect needed
+  const handleToggleChat = useCallback(() => {
+    setChatOpen((v) => {
+      if (!v) setUnreadCount(0);
+      return !v;
+    });
+    if (!chatOpen) setParticipantsOpen(false);
+  }, [chatOpen]);
 
-    videoRef.current.onloadedmetadata = () => {
-      console.log("METADATA LOADED");
+  const handleToggleParticipants = useCallback(() => {
+    setParticipantsOpen((v) => !v);
+    if (!participantsOpen) setChatOpen(false);
+  }, [participantsOpen]);
 
-      playVideo();
-    };
+  // ── Build participant tiles ────────────────────────────────────
+  const screenShares = {};
+  const cameraStreams = {};
 
-    playVideo();
+  Object.entries(remoteStreams).forEach(([key, stream]) => {
+    if (key.endsWith("-screen")) {
+      screenShares[key] = stream;
+    } else {
+      cameraStreams[key] = stream;
+    }
+  });
 
-  }, [stream]);
+  const remoteCount = Object.keys(cameraStreams).length;
+  const totalParticipants = remoteCount + 1;
+  const hasScreenShare = Object.keys(screenShares).length > 0 || screenShareOn;
+
+  function getGridClass() {
+    if (hasScreenShare) return "grid-cols-1";
+    if (totalParticipants <= 1) return "grid-cols-1";
+    if (totalParticipants <= 2) return "grid-cols-1 md:grid-cols-2";
+    if (totalParticipants <= 4) return "grid-cols-2";
+    if (totalParticipants <= 6) return "grid-cols-2 md:grid-cols-3";
+    return "grid-cols-3 md:grid-cols-4";
+  }
+
+  function getRowsClass() {
+    if (hasScreenShare) return "grid-rows-1";
+    if (totalParticipants === 1) return "grid-rows-1";
+    if (totalParticipants === 2) return "grid-rows-2 md:grid-rows-1";
+    if (totalParticipants <= 4) return "grid-rows-2";
+    if (totalParticipants <= 6) return "grid-rows-3 md:grid-rows-2";
+    return "auto-rows-fr";
+  }
+
+  const participantsList = Object.entries(peersData).map(([pid, data]) => ({
+    peerId: pid,
+    name: data.name,
+  }));
+
+  const sidePanelOpen = chatOpen || participantsOpen;
 
   return (
-    <div style={styles.videoBox}>
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={false}
-        controls={false}
-        style={styles.video}
-      />
-
-      <span style={styles.label}>
-        {name || peerId}
-      </span>
-    </div>
-  );
-}
-
-export default function VideoCall({ ws, roomId, peerId, name }) {
-  const { localVideoRef, remoteStreams, peersData, micOn, camOn, toggleMic, toggleCam, switchCamera } =
-    useMediaSoup(ws, roomId, peerId, name);
-
-  return (
-    <div style={styles.wrapper}>
-      <div style={styles.videoGrid}>
-        {/* Local */}
-        <div style={styles.videoBox}>
-          <video ref={localVideoRef} autoPlay muted playsInline style={styles.video} />
-          {!camOn && <div style={styles.camOff}>Camera off</div>}
-          <span style={styles.label}>You</span>
+    <div className="fixed inset-0 bg-surface-500 flex flex-col z-40">
+      {/* ── TOP BAR ────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-2 bg-surface-400/80 backdrop-blur-sm border-b border-surface-100/20 z-20">
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-bold">
+            <span className="text-primary-400">Meet</span>
+            <span className="text-white">Up</span>
+          </h1>
         </div>
 
-        {/* Remote peers */}
-        {Object.entries(remoteStreams).map(([pid, stream]) => (
-          <RemoteVideo key={pid} stream={stream} peerId={pid} name={peersData[pid]?.name} />
-        ))}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={copyRoomId}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-300 hover:bg-surface-200
+                       text-sm text-gray-300 hover:text-white transition-colors cursor-pointer"
+            title="Copy room ID"
+          >
+            <span className="font-mono text-xs">{roomId}</span>
+            {copied ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 text-sm text-gray-400">
+          <span className="font-mono">{formatTime(elapsedTime)}</span>
+        </div>
       </div>
 
-      <div style={styles.controls}>
-        <button onClick={toggleMic} style={{ ...styles.ctrlBtn, background: micOn ? "#334155" : "#ef4444" }} aria-label="Toggle mic">
-          {micOn ? <MicIcon /> : <MicOffIcon />}
-        </button>
-        <button onClick={toggleCam} style={{ ...styles.ctrlBtn, background: camOn ? "#334155" : "#ef4444" }} aria-label="Toggle camera">
-          {camOn ? <CamIcon /> : <CamOffIcon />}
-        </button>
-        <button onClick={switchCamera} style={{ ...styles.ctrlBtn, background: "#334155" }} aria-label="Switch camera">
-          <SwitchCamIcon />
-        </button>
+      {/* ── MAIN CONTENT ───────────────────────────────────────── */}
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Video Area */}
+        <div className={`flex-1 flex transition-all duration-300 ${sidePanelOpen ? "mr-0" : ""}`}>
+          {hasScreenShare ? (
+            <div className="flex-1 flex flex-col md:flex-row gap-2 p-2 h-full overflow-hidden">
+              <div className="flex-1 min-h-0 bg-surface-600 rounded-2xl overflow-hidden relative">
+                {screenShareOn && screenStream ? (
+                  <VideoTile
+                    stream={screenStream}
+                    name="Your screen"
+                    isLocal={true}
+                    isScreenShare={true}
+                    className="absolute inset-0"
+                  />
+                ) : (
+                  Object.entries(screenShares).map(([key, stream]) => {
+                    const srcPeerId = key.replace("-screen", "");
+                    return (
+                      <VideoTile
+                        key={key}
+                        stream={stream}
+                        name={`${peersData[srcPeerId]?.name || "Participant"}'s screen`}
+                        isScreenShare={true}
+                        className="absolute inset-0"
+                      />
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="flex flex-row md:flex-col gap-2 md:w-48 h-32 md:h-full overflow-x-auto md:overflow-y-auto shrink-0 pb-2 md:pb-0 pr-2 md:pr-0">
+                <VideoTile
+                  stream={null}
+                  name={name}
+                  isLocal={true}
+                  isMuted={!micOn}
+                  isCameraOff={!camOn}
+                  className="h-full aspect-video md:h-auto md:w-full shrink-0"
+                  ref={localVideoRef}
+                />
+                {Object.entries(cameraStreams).map(([pid, stream]) => (
+                  <VideoTile
+                    key={pid}
+                    stream={stream}
+                    name={peersData[pid]?.name}
+                    className="h-full aspect-video md:h-auto md:w-full shrink-0"
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className={`flex-1 grid ${getGridClass()} ${getRowsClass()} gap-2 p-2 h-full`}>
+              <div className="relative rounded-2xl overflow-hidden bg-surface-400">
+                <video
+                  ref={localVideoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className={`w-full h-full object-cover ${camOn ? "scale-x-[-1]" : "hidden"}`}
+                />
+                {!camOn && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-surface-400">
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center text-2xl sm:text-3xl font-bold text-white bg-primary-600">
+                      {name ? name.charAt(0).toUpperCase() : "?"}
+                    </div>
+                  </div>
+                )}
+                <div className="absolute bottom-2 left-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-sm text-xs text-white">
+                  {!micOn && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="1" y1="1" x2="23" y2="23" />
+                      <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6" />
+                    </svg>
+                  )}
+                  <span>You</span>
+                </div>
+              </div>
+
+              {Object.entries(cameraStreams).map(([pid, stream]) => (
+                <VideoTile
+                  key={pid}
+                  stream={stream}
+                  name={peersData[pid]?.name}
+                  className="w-full h-full aspect-video"
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── SIDE PANELS ────────────────────────────────────── */}
+        {chatOpen && (
+          <div className="absolute right-0 top-0 bottom-0 z-50 w-full sm:w-80 md:relative md:w-80 flex flex-col h-full shrink-0 bg-surface-300/95 backdrop-blur-xl border-l border-surface-100/30 animate-[slideInRight_0.25s_ease-out] shadow-2xl md:shadow-none">
+            <ChatBox
+              messages={messages}
+              currentUser={name}
+              onClose={() => setChatOpen(false)}
+            />
+            <MessageInput onSend={onSendMessage} />
+          </div>
+        )}
+
+        {participantsOpen && (
+          <div className="absolute right-0 top-0 bottom-0 z-50 w-full sm:w-80 md:relative md:w-80 flex flex-col h-full shrink-0 bg-surface-300/95 backdrop-blur-xl border-l border-surface-100/30 animate-[slideInRight_0.25s_ease-out] shadow-2xl md:shadow-none">
+            <ParticipantsList
+              participants={participantsList}
+              localName={name}
+              onClose={() => setParticipantsOpen(false)}
+            />
+          </div>
+        )}
       </div>
+
+      {/* ── CONTROL BAR ──────────────────────────────────────── */}
+      <ControlBar
+        micOn={micOn}
+        camOn={camOn}
+        screenShareOn={screenShareOn}
+        toggleMic={toggleMic}
+        toggleCam={toggleCam}
+        onToggleScreenShare={toggleScreenShare}
+        onToggleChat={handleToggleChat}
+        onToggleParticipants={handleToggleParticipants}
+        onLeave={onLeave}
+        chatOpen={chatOpen}
+        participantsOpen={participantsOpen}
+        unreadCount={unreadCount}
+        switchCamera={switchCamera}
+      />
     </div>
   );
 }
-
-// styles and icons same as before — copy from your existing VideoCall.jsx
-
-const styles = {
-  wrapper: {
-    marginTop: 16,
-    background: "#0f172a",
-    borderRadius: 12,
-    overflow: "hidden",
-  },
-  videoGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 8,
-    padding: 8,
-  },
-  videoBox: {
-    background: "#1e293b",
-    borderRadius: 10,
-    position: "relative",
-    overflow: "hidden",
-    aspectRatio: "4/3",
-  },
-  video: {
-    width: "100%",
-    height: "100%",
-    objectFit: "cover",
-    display: "block",
-  },
-  label: {
-    position: "absolute",
-    bottom: 8,
-    left: 8,
-    fontSize: 11,
-    color: "#e2e8f0",
-    background: "rgba(0,0,0,0.5)",
-    padding: "2px 8px",
-    borderRadius: 20,
-  },
-  camOff: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    background: "#1e293b",
-    color: "#64748b",
-    fontSize: 13,
-  },
-  controls: {
-    background: "#1e293b",
-    padding: "14px 16px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-    borderTop: "1px solid #334155",
-  },
-  ctrlBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: "50%",
-    border: "none",
-    cursor: "pointer",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "white",
-    transition: "background 0.15s",
-  },
-};
-
-const MicIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
-    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-    <line x1="12" y1="19" x2="12" y2="22"/>
-  </svg>
-);
-
-const SwitchCamIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M20 7h-3a2 2 0 0 1-2-2V2"/>
-    <path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z"/>
-    <path d="M3 15v3a2 2 0 0 0 2 2h7"/>
-    <path d="m7 19-2-2 2-2"/>
-  </svg>
-);
-
-const MicOffIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="1" y1="1" x2="23" y2="23"/>
-    <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6"/>
-    <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
-    <line x1="12" y1="19" x2="12" y2="22"/>
-  </svg>
-);
-
-const CamIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="23 7 16 12 23 17 23 7"/>
-    <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-  </svg>
-);
-
-const CamOffIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="1" y1="1" x2="23" y2="23"/>
-    <path d="M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3m3-3h6l2 3h4a2 2 0 0 1 2 2v9.34"/>
-    <path d="M16 11.37A4 4 0 1 1 12.63 8"/>
-  </svg>
-);
-
-const CallIcon = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.35 2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6a16 16 0 0 0 6 6l.92-.92a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
-  </svg>
-);

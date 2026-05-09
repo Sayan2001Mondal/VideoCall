@@ -1,52 +1,69 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import useSocket from "../hooks/useSocket";
+import useDevicePreview from "../hooks/useDevicePreview";
 import JoinRoom from "../components/JoinRoom";
-import ChatBox from "../components/ChatBox";
-import MessageInput from "../components/MessageInput";
-import VideoCall from "@/components/VideoCall";
+import VideoCall from "../components/VideoCall";
 
 export default function Page() {
+  // ── State ──────────────────────────────────────────────────────
   const [name, setName] = useState("");
   const [roomId, setRoomId] = useState("");
   const [joined, setJoined] = useState(false);
   const [messages, setMessages] = useState([]);
+  const [peerId] = useState(() => uuidv4());
+  const [wsConnected, setWsConnected] = useState(false);
 
-const [peerId] = useState(() => uuidv4());
+  // ── WebSocket ──────────────────────────────────────────────────
   const ws = useSocket((data) => {
     if (data.type === "chat" || data.type === "system") {
-      setMessages((prev) => [...prev, data]);
+      setMessages((prev) => [...prev, { ...data, timestamp: Date.now() }]);
     }
-  });
+  }, setWsConnected);
 
-  const [inCall, setInCall] = useState(false);
+  // ── Device preview (used on the join screen) ───────────────────
+  const {
+    videoRef: previewVideoRef,
+    streamRef: previewStreamRef,
+    micOn: previewMicOn,
+    camOn: previewCamOn,
+    audioLevel,
+    hasPermission,
+    toggleMic: previewToggleMic,
+    toggleCam: previewToggleCam,
+    cleanup: cleanupPreview,
+    stopAllTracks,
+  } = useDevicePreview();
 
+  // ── Join handler ───────────────────────────────────────────────
   const handleJoin = () => {
-    if (!name || !roomId) return;
+  if (!name.trim() || !roomId.trim()) return;
+  if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+  cleanupPreview();
+  setJoined(true);
+};
 
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
-      alert("Connecting... please try again in a moment.");
-      return;
-    }
+    // Clean up audio monitoring but keep the stream
+    
 
-    setJoined(true);
-  };
+  // ── Leave handler ──────────────────────────────────────────────
+  const handleLeave = () => {
+  setJoined(false);
+  window.location.reload();
+};
 
-  const sendMessage = (msg) => {
-    ws.current.send(
-      JSON.stringify({
-        type: "chat",
-        roomId,
-        message: msg,
-        sender: name,
-      })
-    );
-    // Don't add locally — the server echoes the message back to the sender,
-    // so the chat handler in useSocket will add it exactly once.
-  };
+  // ── Send chat message ──────────────────────────────────────────
+ const sendMessage = (msg) => {
+  if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+  ws.current.send(JSON.stringify({ type: "chat", roomId, peerId, message: msg, sender: name }));
+  setMessages((prev) => [...prev, { type: "chat", sender: name, message: msg, timestamp: Date.now() }]);
+};
 
+  // ── RENDER ─────────────────────────────────────────────────────
+
+  // Before joining: show the preview / join screen
   if (!joined) {
     return (
       <JoinRoom
@@ -55,27 +72,31 @@ const [peerId] = useState(() => uuidv4());
         roomId={roomId}
         setRoomId={setRoomId}
         onJoin={handleJoin}
+        previewVideoRef={previewVideoRef}
+        micOn={previewMicOn}
+        camOn={previewCamOn}
+        toggleMic={previewToggleMic}
+        toggleCam={previewToggleCam}
+        audioLevel={audioLevel}
+        hasPermission={hasPermission}
+        wsConnected={wsConnected}
       />
     );
   }
 
+  // After joining: full-screen video call
   return (
-  <div className="container">
-    <h2>Room: {roomId}</h2>
-
-    <ChatBox messages={messages} currentUser={name} />
-
-    <MessageInput onSend={sendMessage} />
-    
-    {inCall ? (
-      <VideoCall ws={ws} roomId={roomId} peerId={peerId} name={name} />
-    ) : (
-      <div style={{ marginTop: '20px', textAlign: 'center' }}>
-        <button onClick={() => setInCall(true)} style={{ width: '100%', padding: '14px', fontSize: '16px', background: '#3b82f6', color: 'white', borderRadius: '8px', cursor: 'pointer', border: 'none' }}>
-          Join Video Call
-        </button>
-      </div>
-    )}
-  </div>
-);
+    <VideoCall
+      ws={ws}
+      roomId={roomId}
+      peerId={peerId}
+      name={name}
+      existingStreamRef={previewStreamRef}
+      initialMicOn={previewMicOn}
+      initialCamOn={previewCamOn}
+      messages={messages}
+      onSendMessage={sendMessage}
+      onLeave={handleLeave}
+    />
+  );
 }
