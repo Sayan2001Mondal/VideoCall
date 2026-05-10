@@ -1,16 +1,16 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { MessageSquare } from "lucide-react";
 
 /**
- * ChatBox — slide-in side panel for in-call chat (Google Meet style).
+ * ChatBox — in-call chat messages
  *
  * Props:
- *  - messages       array of { sender, message, timestamp? }
- *  - currentUser    string — your name
- *  - onClose()      close the chat panel
+ * - messages       array of { sender, message, timestamp?, type? }
+ * - currentUser    string — your name
  */
-export default function ChatBox({ messages, currentUser, onClose }) {
+export default function ChatBox({ messages, currentUser }) {
   const bottomRef = useRef(null);
 
   // Auto-scroll to latest message
@@ -19,71 +19,81 @@ export default function ChatBox({ messages, currentUser, onClose }) {
   }, [messages]);
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-surface-100/30">
-        <h3 className="text-base font-semibold text-white">In-call messages</h3>
-        <button
-          onClick={onClose}
-          className="w-8 h-8 rounded-full hover:bg-surface-100 flex items-center justify-center
-                     text-gray-400 hover:text-white transition-colors cursor-pointer"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
+    <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 bg-surface-50">
+      {/* Empty State */}
+      {messages.length === 0 && (
+        <div className="flex flex-col items-center justify-center h-full text-center text-text-muted">
+          <MessageSquare size={90} className="mb-4 opacity-20" />
+          <p className="text-sm font-medium">No messages yet</p>
+          <p className="text-xs mt-1 text-text-muted max-w-[220px] leading-relaxed">
+            Messages are only visible to people in the call
+          </p>
+        </div>
+      )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
-            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mb-3 opacity-40">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            <p className="text-sm">No messages yet</p>
-            <p className="text-xs mt-1">Messages are only visible to people in the call</p>
-          </div>
-        )}
+      {messages.map((m, i) => {
+        const isMe = m.sender === currentUser;
+        const isSystem = m.type === "system";
 
-        {messages.map((m, i) => {
-          const isMe = m.sender === currentUser;
-          const isSystem = m.type === "system";
-
-          if (isSystem) {
-            return (
-              <div key={i} className="text-center">
-                <span className="text-xs text-gray-500 bg-surface-400/50 px-3 py-1 rounded-full">
-                  {m.message}
-                </span>
-              </div>
-            );
-          }
-
+        // System message
+        if (isSystem) {
           return (
-            <div key={i} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
-              {/* Sender name (only for others) */}
+            <div key={i} className="flex justify-center">
+              <span className="text-xs text-text-secondary bg-surface-200 px-3 py-1 rounded-full">
+                {m.message}
+              </span>
+            </div>
+          );
+        }
+
+        return (
+          <div
+            key={i}
+            // 1. Flex wrapper guarantees it respects parent padding and scrollbars
+            className={`flex w-full ${isMe ? "justify-end" : "justify-start"} `}
+          >
+            {/* 2. Inner container handles the max-width and vertical stacking */}
+            <div
+              className={`flex flex-col ${
+                isMe ? "items-end" : "items-start"
+              } max-w-[85%] `}
+            >
+              {/* Sender Name */}
               {!isMe && (
-                <span className="text-[11px] text-primary-400 font-medium mb-0.5 ml-1">
+                <span className="text-[11px] text-primary-600 font-semibold mb-1 ml-1">
                   {m.sender}
                 </span>
               )}
 
-              {/* Message bubble */}
-              <div
-                className={`max-w-[85%] px-3 py-2 rounded-2xl text-sm leading-relaxed break-words
-                  ${isMe
-                    ? "bg-primary-600 text-white rounded-br-md"
-                    : "bg-surface-100 text-gray-100 rounded-bl-md"
-                  }`}
-              >
-                {m.message}
-              </div>
+              {/* Chat Bubble */}
+              {/* 3. Removed `w-fit`. The parent's flex alignment naturally shrink-wraps the box, keeping padding intact. */}
+              {/* Chat Bubble */}
+<div
+  // THE NUCLEAR TEST: Bypassing Tailwind completely
+  style={{ padding: "10px 16px", margin: "8px 0px" }} 
+  className={`
+    w-fit
+    rounded-2xl
+    text-sm
+    leading-relaxed
+    break-words
+    shadow-sm
+    transition-all
+    ${
+      isMe
+        ? "bg-primary-500 text-white rounded-br-sm"
+        : "bg-surface-200 text-text-primary rounded-bl-sm border border-border"
+    }
+  `}
+>
+  {m.message}
+</div>
+              
 
               {/* Timestamp */}
               {m.timestamp && (
-                <span className="text-[10px] text-gray-600 mt-0.5 mx-1">
+                <span className="text-[10px] text-text-muted mt-1 px-1">
                   {new Date(m.timestamp).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -91,11 +101,12 @@ export default function ChatBox({ messages, currentUser, onClose }) {
                 </span>
               )}
             </div>
-          );
-        })}
+          </div>
+        );
+      })}
 
-        <div ref={bottomRef} />
-      </div>
+      {/* Auto Scroll Anchor */}
+      <div ref={bottomRef} />
     </div>
   );
 }

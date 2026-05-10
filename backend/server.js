@@ -5,7 +5,26 @@ const setupWebSocket = require("./config/websocket");
 const { getWorker } = require("./config/mediasoupWorker");
 
 const app = express();
-app.use(cors({ origin: "https://sayan.superfastmind.com", credentials: true }));
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "https://sayan.superfastmind.com",
+];
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`Origin not allowed by CORS: ${origin}`));
+    },
+    credentials: true,
+  })
+);
 
 const server = http.createServer(app);
 

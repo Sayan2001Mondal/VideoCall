@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import dynamic from "next/dynamic";
+import { useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import useSocket from "../hooks/useSocket";
 import useDevicePreview from "../hooks/useDevicePreview";
 import JoinRoom from "../components/JoinRoom";
 import VideoCall from "../components/VideoCall";
 
-export default function Page() {
+function PageClient() {
   // ── State ──────────────────────────────────────────────────────
   const [name, setName] = useState("");
   const [roomId, setRoomId] = useState("");
@@ -31,6 +32,7 @@ export default function Page() {
     camOn: previewCamOn,
     audioLevel,
     hasPermission,
+    statusMessage,
     toggleMic: previewToggleMic,
     toggleCam: previewToggleCam,
     cleanup: cleanupPreview,
@@ -79,6 +81,7 @@ export default function Page() {
         toggleCam={previewToggleCam}
         audioLevel={audioLevel}
         hasPermission={hasPermission}
+        statusMessage={statusMessage}
         wsConnected={wsConnected}
       />
     );
@@ -100,3 +103,5 @@ export default function Page() {
     />
   );
 }
+
+export default dynamic(() => Promise.resolve(PageClient), { ssr: false });

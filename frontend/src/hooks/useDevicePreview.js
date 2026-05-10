@@ -13,6 +13,7 @@ export default function useDevicePreview() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [hasPermission, setHasPermission] = useState(null);
   const [devices, setDevices] = useState({ video: [], audio: [] });
+  const [statusMessage, setStatusMessage] = useState("Requesting access...");
 
   // ── audio level monitor ──────────────────────────────────────
   const setupAudioMonitor = useCallback((stream) => {
@@ -79,30 +80,56 @@ export default function useDevicePreview() {
         if (!navigator.mediaDevices?.getUserMedia) {
           console.warn("MediaDevices API not available (requires HTTPS)");
           setHasPermission(false);
+          setStatusMessage("Camera requires HTTPS");
           return;
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
+        const allDevices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = allDevices.filter((d) => d.kind === "videoinput");
+        const audioDevices = allDevices.filter((d) => d.kind === "audioinput");
+
+        const constraints = {
+          video: videoDevices.length > 0,
+          audio: audioDevices.length > 0,
+        };
+
+        if (!constraints.video && !constraints.audio) {
+          setHasPermission(false);
+          setDevices({ video: videoDevices, audio: audioDevices });
+          setStatusMessage("No camera or microphone found");
+          return;
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
         streamRef.current = stream;
         if (videoRef.current) videoRef.current.srcObject = stream;
 
-        const allDevices = await navigator.mediaDevices.enumerateDevices();
-
         // ✅ All state updates after awaits — React 18 auto-batches these
         setHasPermission(true);
         setDevices({
-          video: allDevices.filter((d) => d.kind === "videoinput"),
-          audio: allDevices.filter((d) => d.kind === "audioinput"),
+          video: videoDevices,
+          audio: audioDevices,
         });
+        setCamOn(stream.getVideoTracks().length > 0);
+        setMicOn(stream.getAudioTracks().length > 0);
+        setStatusMessage(
+          stream.getVideoTracks().length > 0
+            ? "Camera is off"
+            : "Camera not found"
+        );
 
         setupAudioMonitor(stream);
       } catch (err) {
         console.error("Device preview error:", err);
         setHasPermission(false);
+        if (err?.name === "NotAllowedError") {
+          setStatusMessage("Camera access denied");
+        } else if (err?.name === "NotFoundError") {
+          setStatusMessage("Requested camera or microphone not found");
+        } else {
+          setStatusMessage("Could not access camera or microphone");
+        }
       }
     }
 
@@ -124,6 +151,7 @@ export default function useDevicePreview() {
     audioLevel,
     hasPermission,
     devices,
+    statusMessage,
     toggleMic,
     toggleCam,
     cleanup,
