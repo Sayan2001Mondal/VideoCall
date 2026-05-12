@@ -29,6 +29,7 @@ export default function VideoCall({
     localVideoRef,
     remoteStreams,
     peersData,
+    localStream,
     micOn,
     camOn,
     screenShareOn,
@@ -44,6 +45,7 @@ export default function VideoCall({
   const [unreadCount, setUnreadCount] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [focusedPeerId, setFocusedPeerId] = useState(null);
   const prevMsgCount = useRef(messages.length);
 
   // Track unread messages when chat is closed
@@ -95,20 +97,51 @@ export default function VideoCall({
     if (!participantsOpen) setChatOpen(false);
   }, [participantsOpen]);
 
-  // Build participant tiles
-  const screenShares = {};
+  const handleTileClick = (pid) => {
+    setFocusedPeerId((prev) => (prev === pid ? null : pid));
+  };
+
+  // Build participant lists for layout
   const cameraStreams = {};
+  const screenShares = {};
   Object.entries(remoteStreams).forEach(([key, stream]) => {
     if (key.endsWith("-screen")) screenShares[key] = stream;
     else cameraStreams[key] = stream;
   });
 
-  const remoteCount = Object.keys(cameraStreams).length;
-  const totalParticipants = remoteCount + 1;
-  const hasScreenShare = Object.keys(screenShares).length > 0 || screenShareOn;
+  const allParticipants = [
+    { pid: "local", stream: localStream, name: name, isLocal: true },
+    ...Object.entries(cameraStreams).map(([pid, stream]) => ({
+      pid,
+      stream,
+      name: peersData[pid]?.name,
+      isLocal: false,
+    })),
+  ];
+
+  const allScreenShares = [
+    ...Object.entries(screenShares).map(([key, stream]) => ({
+      pid: key,
+      stream,
+      name: `${peersData[key.replace("-screen", "")]?.name || "Participant"}'s screen`,
+      isScreenShare: true,
+    })),
+    ...(screenShareOn && screenStream ? [{
+      pid: "local-screen",
+      stream: screenStream,
+      name: "Your screen",
+      isLocal: true,
+      isScreenShare: true,
+    }] : []),
+  ];
+
+  const hasActiveScreenShare = allScreenShares.length > 0;
+  const isFocusedMode = focusedPeerId !== null;
+  const isScreenShareMode = !isFocusedMode && hasActiveScreenShare;
 
   function getGridClass() {
-    if (hasScreenShare) return "grid-cols-1";
+    const totalParticipants = allParticipants.length;
+    if (hasActiveScreenShare) return "grid-cols-1";
     if (totalParticipants <= 1) return "grid-cols-1";
     if (totalParticipants <= 2) return "grid-cols-1 md:grid-cols-2";
     if (totalParticipants <= 4) return "grid-cols-2";
@@ -117,13 +150,38 @@ export default function VideoCall({
   }
 
   function getRowsClass() {
-    if (hasScreenShare) return "grid-rows-1";
+    const totalParticipants = allParticipants.length;
+    if (hasActiveScreenShare) return "grid-rows-1";
     if (totalParticipants === 1) return "grid-rows-1";
     if (totalParticipants === 2) return "grid-rows-2 md:grid-rows-1";
     if (totalParticipants <= 4) return "grid-rows-2";
     if (totalParticipants <= 6) return "grid-rows-3 md:grid-rows-2";
     return "auto-rows-fr";
   }
+
+
+  const renderTile = (p) => (
+    <VideoTile
+      key={p.pid}
+      stream={p.stream}
+      name={p.name}
+      isLocal={p.isLocal}
+      isScreenShare={p.isScreenShare}
+      onClick={() => handleTileClick(p.pid)}
+      className={cn(
+        "w-full h-full aspect-video",
+        focusedPeerId === p.pid && "ring-4 ring-primary-500"
+      )}
+    />
+  );
+
+  const renderOthers = (mainPid) => {
+    const others = [
+      ...allParticipants.filter((p) => p.pid !== mainPid),
+      ...allScreenShares.filter((s) => s.pid !== mainPid),
+    ];
+    return others.map((p) => renderTile(p));
+  };
 
   const participantsList = Object.entries(peersData).map(([pid, data]) => ({
     peerId: pid,
@@ -169,51 +227,34 @@ export default function VideoCall({
       <div className="flex-1 flex overflow-hidden relative">
         {/* Video Area */}
         <div className="flex-1 flex transition-all duration-300">
-          {hasScreenShare ? (
+          {isFocusedMode ? (
             <div className="flex-1 flex flex-col md:flex-row gap-2 p-2 h-full overflow-hidden">
-              <div className="flex-1 min-h-0 bg-surface-200 rounded-2xl overflow-hidden relative border border-border/50">
-                {screenShareOn && screenStream ? (
-                  <VideoTile stream={screenStream} name="Your screen" isLocal={true} isScreenShare={true} className="absolute inset-0" />
-                ) : (
-                  Object.entries(screenShares).map(([key, stream]) => {
-                    const srcPeerId = key.replace("-screen", "");
-                    return (
-                      <VideoTile key={key} stream={stream} name={`${peersData[srcPeerId]?.name || "Participant"}'s screen`} isScreenShare={true} className="absolute inset-0" />
-                    );
-                  })
-                )}
+              {/* Main Focused Tile */}
+              <div className="flex-1 bg-surface-200 rounded-2xl overflow-hidden relative border border-border/50">
+                {(() => {
+                  const main = [...allParticipants, ...allScreenShares].find(p => p.pid === focusedPeerId);
+                  return main ? renderTile(main) : null;
+                })()}
+              </div>
+              {/* Side Tiles */}
+              <div className="flex flex-row md:flex-col gap-2 md:w-48 h-32 md:h-full overflow-x-auto md:overflow-y-auto shrink-0 pb-2 md:pb-0 pr-2 md:pr-0">
+                {renderOthers(focusedPeerId)}
+              </div>
+            </div>
+          ) : isScreenShareMode ? (
+            <div className="flex-1 flex flex-col md:flex-row gap-2 p-2 h-full overflow-hidden">
+              <div className="flex-1 bg-surface-200 rounded-2xl overflow-hidden relative border border-border/50">
+                {renderTile(allScreenShares[0])}
               </div>
               <div className="flex flex-row md:flex-col gap-2 md:w-48 h-32 md:h-full overflow-x-auto md:overflow-y-auto shrink-0 pb-2 md:pb-0 pr-2 md:pr-0">
-                <VideoTile stream={null} name={name} isLocal={true} isMuted={!micOn} isCameraOff={!camOn} className="h-full aspect-video md:h-auto md:w-full shrink-0" ref={localVideoRef} />
-                {Object.entries(cameraStreams).map(([pid, stream]) => (
-                  <VideoTile key={pid} stream={stream} name={peersData[pid]?.name} className="h-full aspect-video md:h-auto md:w-full shrink-0" />
-                ))}
+                {allParticipants.map(p => renderTile(p))}
+                {allScreenShares.slice(1).map(s => renderTile(s))}
               </div>
             </div>
           ) : (
             <div className={`flex-1 grid ${getGridClass()} ${getRowsClass()} gap-2 p-2 h-full`}>
-              <div className="relative rounded-2xl overflow-hidden bg-surface-200 border border-border/50">
-                <video ref={localVideoRef} autoPlay muted playsInline className={cn("w-full h-full object-cover", camOn ? "scale-x-[-1]" : "hidden")} />
-                {!camOn && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-surface-200 to-surface-300">
-                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center text-2xl sm:text-3xl font-bold text-white bg-primary-500">
-                      {name ? name.charAt(0).toUpperCase() : "?"}
-                    </div>
-                  </div>
-                )}
-                <div className="absolute bottom-2 left-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/50 backdrop-blur-sm text-xs text-white">
-                  {!micOn && (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="1" y1="1" x2="23" y2="23" />
-                      <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6" />
-                    </svg>
-                  )}
-                  <span>You</span>
-                </div>
-              </div>
-              {Object.entries(cameraStreams).map(([pid, stream]) => (
-                <VideoTile key={pid} stream={stream} name={peersData[pid]?.name} className="w-full h-full aspect-video" />
-              ))}
+              {allParticipants.map(p => renderTile(p))}
+              {allScreenShares.map(s => renderTile(s))}
             </div>
           )}
         </div>

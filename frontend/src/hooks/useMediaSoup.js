@@ -11,6 +11,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
 
   const localVideoRef = useRef(null);
   const [remoteStreams, setRemoteStreams] = useState({});
+  const [localStream, setLocalStream] = useState(null);
   const [peersData, setPeersData] = useState({});
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
@@ -207,6 +208,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
       }
 
       localStreamRef.current = stream;
+      setLocalStream(stream);
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
       const audioTrack = stream.getAudioTracks()[0];
@@ -324,6 +326,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
     localStreamRef.current.addTrack(newTrack);
 
     if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
+    setLocalStream(localStreamRef.current);
   }, []);
 
   // ── screen sharing ────────────────────────────────────────────
@@ -347,7 +350,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
 
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { cursor: "always", displaySurface: "monitor" },
+        video: true,
         audio: false,
       });
 
@@ -381,6 +384,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
   return {
     localVideoRef,
     localStreamRef,
+    localStream,
     remoteStreams,
     peersData,
     micOn,

@@ -71,6 +71,13 @@ export default function useDevicePreview() {
     setCamOn((v) => !v);
   }, []);
 
+  // ── synchronize stream to video element ──────────────────────────
+  useEffect(() => {
+    if (hasPermission && camOn && videoRef.current && streamRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [hasPermission, camOn]);
+
   // ── init on mount ────────────────────────────────────────────
   // ✅ Async logic inlined directly — no useCallback wrapper,
   //    so React Compiler doesn't treat setState calls as synchronous-in-effect
@@ -103,8 +110,6 @@ export default function useDevicePreview() {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
         streamRef.current = stream;
-        if (videoRef.current) videoRef.current.srcObject = stream;
-
         // ✅ All state updates after awaits — React 18 auto-batches these
         setHasPermission(true);
         setDevices({
@@ -115,7 +120,7 @@ export default function useDevicePreview() {
         setMicOn(stream.getAudioTracks().length > 0);
         setStatusMessage(
           stream.getVideoTracks().length > 0
-            ? "Camera is off"
+            ? "Camera ready"
             : "Camera not found"
         );
 

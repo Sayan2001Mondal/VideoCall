@@ -67,19 +67,23 @@ export default function ControlBar({
         </Tooltip>
 
         {/* Switch Camera (only visible on mobile / touch devices) */}
-        <Tooltip content="Switch camera">
+        <div className="lg:hidden"> 
+          <Tooltip content="Switch camera">
           <IconButton
             onClick={switchCamera}
-            className="sm:hidden"
             aria-label="Switch camera"
           >
             <SwitchCamera size={18} />
           </IconButton>
         </Tooltip>
+        </div>
+        
 
         {/* Screen Share */}
-        <Tooltip content={screenShareOn ? "Stop sharing" : "Share screen"}>
+        <div className="hidden lg:block">
+          <Tooltip content={screenShareOn ? "Stop sharing" : "Share screen"}>
           <IconButton
+          
             onClick={onToggleScreenShare}
             highlight={screenShareOn}
             aria-label={screenShareOn ? "Stop sharing" : "Share screen"}
@@ -87,6 +91,7 @@ export default function ControlBar({
             {screenShareOn ? <ScreenShareOff size={18} /> : <ScreenShare size={18} />}
           </IconButton>
         </Tooltip>
+        </div>
 
         {/* Divider */}
         <div className="w-px h-8 bg-border mx-1 hidden sm:block" />

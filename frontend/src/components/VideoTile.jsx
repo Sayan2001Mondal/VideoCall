@@ -14,6 +14,7 @@ export default function VideoTile({
   isSpeaking = false,
   isScreenShare = false,
   className = "",
+  onClick,
 }) {
   const videoRef = useRef(null);
 
@@ -29,8 +30,9 @@ export default function VideoTile({
 
   return (
     <div
+      onClick={onClick}
       className={cn(
-        "relative rounded-2xl overflow-hidden bg-surface-200 border border-border/50",
+        "relative rounded-2xl overflow-hidden bg-surface-200 border border-border/50 cursor-pointer",
         isSpeaking && "ring-2 ring-primary-400 animate-[speaking-glow_1.5s_ease-in-out_infinite]",
         className
       )}
