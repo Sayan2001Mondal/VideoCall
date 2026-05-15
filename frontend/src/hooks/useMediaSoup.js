@@ -47,7 +47,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
   }
 
   async function setupSendTransport(device, transportOptions) {
-    const transport = device.createSendTransport(transportOptions);
+    const transport = device.createSendTransport({...transportOptions, iceTransportPolicy: "all"});
 
     transport.on("connect", ({ dtlsParameters }, cb, eb) => {
       send({ type: "connectTransport", roomId, peerId, transportId: transport.id, dtlsParameters });
@@ -85,7 +85,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
   }
 
   async function setupRecvTransport(device, transportOptions) {
-    const transport = device.createRecvTransport(transportOptions);
+    const transport = device.createRecvTransport({...transportOptions, iceTransportPolicy: "all"});
 
     transport.on("connect", ({ dtlsParameters }, cb, eb) => {
       send({ type: "connectTransport", roomId, peerId, transportId: transport.id, dtlsParameters });

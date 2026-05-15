@@ -35,7 +35,11 @@ module.exports = {
     listenIps: [
       {
         ip: "0.0.0.0",
-        announcedIp: "192.168.0.166", 
+        announcedIp: "72.60.220.252", // REQUIRED for users on different networks!
+      },
+      {
+        ip: "0.0.0.0",
+        announcedIp: "192.168.0.166", // REQUIRED for users on the same local network
       },
       {
         ip: "127.0.0.1",
@@ -44,4 +48,13 @@ module.exports = {
     maxIncomingBitrate: 1500000,
     initialAvailableOutgoingBitrate: 1000000,
   },
+  turn: {                                                                                                                 
+         iceServers: [                                                                                                         
+           {                                                                                                                   
+             urls: "turn:turn.viksun.net:3478?transport=tcp",                                                                    
+             username: "dcsusers",                                                                                        
+             credential: "volini12",                                                                                      
+           },                                                                                                                  
+         ],                                                                                                                    
+        }, 
 }

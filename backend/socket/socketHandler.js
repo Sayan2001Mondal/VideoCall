@@ -104,6 +104,7 @@ function socketHandler(ws) {
               iceParameters: transport.iceParameters,
               iceCandidates: transport.iceCandidates,
               dtlsParameters: transport.dtlsParameters,
+              iceServers: config.turn.iceServers,
             },
           });
           break;
