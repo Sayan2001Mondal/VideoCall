@@ -1,7 +1,7 @@
 const { getWorker } = require("../config/mediasoupWorker");
 const config = require("../config/mediasoup");
 
-// rooms[roomId] = { router, peers: { peerId: { ws, transports, producers, consumers } } }
+// rooms[roomId] = { router, peers: { peerId: { ws, transports, producers, consumers, dataProducers, dataConsumers } } }
 const rooms = {};
 
 async function getOrCreateRoom(roomId) {
@@ -22,6 +22,8 @@ function addPeer(roomId, peerId, ws) {
       transports: {},
       producers: {},
       consumers: {},
+      dataProducers: {},
+      dataConsumers: {},
     };
   }
 }

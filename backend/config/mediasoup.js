@@ -45,6 +45,9 @@ module.exports = {
         ip: "127.0.0.1",
       }
     ],
+    enableSctp: true,
+    numSctpStreams: { OS: 1024, MIS: 1024 },
+    maxSctpMessageSize: 262144,
     maxIncomingBitrate: 1500000,
     initialAvailableOutgoingBitrate: 1000000,
   },

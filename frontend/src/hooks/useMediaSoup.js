@@ -6,13 +6,16 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
   const sendTransportRef = useRef(null);
   const recvTransportRef = useRef(null);
   const producersRef = useRef({});
+  const dataProducerRef = useRef(null);
   const consumersRef = useRef({});
+  const dataConsumersRef = useRef({});
   const localStreamRef = useRef(null);
 
   const localVideoRef = useRef(null);
   const [remoteStreams, setRemoteStreams] = useState({});
   const [localStream, setLocalStream] = useState(null);
   const [peersData, setPeersData] = useState({});
+  const [chatMessages, setChatMessages] = useState([]);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [screenShareOn, setScreenShareOn] = useState(false);
@@ -47,7 +50,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
   }
 
   async function setupSendTransport(device, transportOptions) {
-    const transport = device.createSendTransport({...transportOptions, iceTransportPolicy: "all"});
+    const transport = device.createSendTransport({ ...transportOptions, iceTransportPolicy: "all" });
 
     transport.on("connect", ({ dtlsParameters }, cb, eb) => {
       send({ type: "connectTransport", roomId, peerId, transportId: transport.id, dtlsParameters });
@@ -81,11 +84,31 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
       ws.current.addEventListener("message", h);
     });
 
+    transport.on("producedata", ({ sctpStreamParameters, label, protocol }, cb, eb) => {
+      send({
+        type: "produceData",
+        roomId,
+        peerId,
+        transportId: transport.id,
+        sctpStreamParameters,
+        label,
+        protocol,
+      });
+      const h = (e) => {
+        const m = JSON.parse(e.data);
+        if (m.type === "dataProduced") {
+          ws.current.removeEventListener("message", h);
+          cb({ id: m.dataProducerId });
+        }
+      };
+      ws.current.addEventListener("message", h);
+    });
+
     sendTransportRef.current = transport;
   }
 
   async function setupRecvTransport(device, transportOptions) {
-    const transport = device.createRecvTransport({...transportOptions, iceTransportPolicy: "all"});
+    const transport = device.createRecvTransport({ ...transportOptions, iceTransportPolicy: "all" });
 
     transport.on("connect", ({ dtlsParameters }, cb, eb) => {
       send({ type: "connectTransport", roomId, peerId, transportId: transport.id, dtlsParameters });
@@ -161,6 +184,71 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
     });
   }
 
+  async function consumeDataProducer(dataProducerId, sourcePeerId, sourceName) {
+    if (!recvTransportRef.current) {
+      console.log("Recv transport missing for data consume");
+      return;
+    }
+
+    send({
+      type: "consumeData",
+      roomId,
+      peerId,
+      dataProducerId,
+    });
+
+    return new Promise((resolve) => {
+      const h = async (e) => {
+        const m = JSON.parse(e.data);
+
+        if (m.type === "dataConsumed" && m.dataProducerId === dataProducerId) {
+          ws.current.removeEventListener("message", h);
+
+          try {
+            const dataConsumer = await recvTransportRef.current.consumeData({
+              id: m.dataConsumerId,
+              dataProducerId: m.dataProducerId,
+              sctpStreamParameters: m.sctpStreamParameters,
+              label: m.label,
+              protocol: m.protocol,
+            });
+
+            dataConsumersRef.current[dataConsumer.id] = dataConsumer;
+
+            dataConsumer.on("message", (message) => {
+              try {
+                const parsed = JSON.parse(message);
+                setChatMessages((prev) => [
+                  ...prev,
+                  {
+                    sender: parsed.sender || sourceName || peersData[sourcePeerId]?.name || "Participant",
+                    message: parsed.message ?? "",
+                    timestamp: parsed.timestamp || Date.now(),
+                  },
+                ]);
+              } catch {
+                setChatMessages((prev) => [
+                  ...prev,
+                  {
+                    sender: sourceName || peersData[sourcePeerId]?.name || "Participant",
+                    message: String(message),
+                    timestamp: Date.now(),
+                  },
+                ]);
+              }
+            });
+
+            resolve(dataConsumer);
+          } catch (err) {
+            console.error("Consume data error:", err);
+          }
+        }
+      };
+
+      ws.current.addEventListener("message", h);
+    });
+  }
+
   // ── main init ──────────────────────────────────────────────────
   useEffect(() => {
     if (!ws.current || !roomId || !peerId) return;
@@ -223,6 +311,18 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
         const videoProducer = await sendTransportRef.current.produce({ track: videoTrack });
         producersRef.current.video = videoProducer;
       }
+
+      try {
+        const dataProducer = await sendTransportRef.current.produceData({
+          ordered: true,
+          label: "chat",
+          protocol: "json",
+        });
+        dataProducerRef.current = dataProducer;
+        console.log("Frontend: Data producer created successfully!");
+      } catch (err) {
+        console.error("Failed to create data producer:", err);
+      }
     }
 
     const messageHandler = async (e) => {
@@ -237,6 +337,18 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
         for (const { producerId, peerId: sourcePeerId, name: sourceName, isScreenShare } of msg.producers) {
           setPeersData((prev) => ({ ...prev, [sourcePeerId]: { name: sourceName } }));
           await consumeProducer(producerId, sourcePeerId, isScreenShare);
+        }
+      }
+
+      if (msg.type === "newDataProducer") {
+        setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name } }));
+        await consumeDataProducer(msg.dataProducerId, msg.peerId, msg.name);
+      }
+
+      if (msg.type === "existingDataProducers") {
+        for (const { dataProducerId, peerId: sourcePeerId, name: sourceName } of msg.dataProducers) {
+          setPeersData((prev) => ({ ...prev, [sourcePeerId]: { name: sourceName } }));
+          await consumeDataProducer(dataProducerId, sourcePeerId, sourceName);
         }
       }
 
@@ -281,6 +393,8 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
       ws.current?.removeEventListener("message", messageHandler);
       sendTransportRef.current?.close();
       recvTransportRef.current?.close();
+      dataProducerRef.current?.close?.();
+      Object.values(dataConsumersRef.current).forEach((consumer) => consumer.close?.());
       if (!existingStreamRef?.current) {
         localStreamRef.current?.getTracks().forEach((t) => t.stop());
       }
@@ -381,6 +495,20 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
     }
   }, [screenShareOn, startScreenShare, stopScreenShare]);
 
+  const sendChatMessage = useCallback((text) => {
+    if (!dataProducerRef.current) {
+      console.error("Data producer not initialized");
+      return;
+    }
+    const payload = {
+      sender: name,
+      message: text,
+      timestamp: Date.now(),
+    };
+    dataProducerRef.current.send(JSON.stringify(payload));
+    setChatMessages((prev) => [...prev, payload]);
+  }, [name]);
+
   return {
     localVideoRef,
     localStreamRef,
@@ -395,5 +523,7 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
     toggleCam,
     switchCamera,
     toggleScreenShare,
+    chatMessages,
+    sendChatMessage,
   };
 }

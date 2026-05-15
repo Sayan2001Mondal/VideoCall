@@ -13,16 +13,28 @@ function PageClient() {
   const [name, setName] = useState("");
   const [roomId, setRoomId] = useState("");
   const [joined, setJoined] = useState(false);
-  const [messages, setMessages] = useState([]);
   const [peerId] = useState(() => uuidv4());
+  const [messages, setMessages] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
 
   // ── WebSocket ──────────────────────────────────────────────────
   const ws = useSocket((data) => {
     if (data.type === "chat" || data.type === "system") {
-      setMessages((prev) => [...prev, { ...data, timestamp: Date.now() }]);
+      setMessages((prev) => {
+        // Deduplicate: if the last message is exactly the same and from the same sender, ignore it
+        const lastMsg = prev[prev.length - 1];
+        if (lastMsg && lastMsg.sender === data.sender && lastMsg.message === data.message) {
+          return prev;
+        }
+        return [...prev, { ...data, timestamp: Date.now() }];
+      });
     }
   }, setWsConnected);
+
+  const sendMessage = (msg) => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    ws.current.send(JSON.stringify({ type: "chat", roomId, peerId, message: msg, sender: name }));
+  };
 
   // ── Device preview (used on the join screen) ───────────────────
   const {
@@ -55,14 +67,6 @@ function PageClient() {
   setJoined(false);
   window.location.reload();
 };
-
-  // ── Send chat message ──────────────────────────────────────────
- const sendMessage = (msg) => {
-  if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
-  ws.current.send(JSON.stringify({ type: "chat", roomId, peerId, message: msg, sender: name }));
-  setMessages((prev) => [...prev, { type: "chat", sender: name, message: msg, timestamp: Date.now() }]);
-};
-
   // ── RENDER ─────────────────────────────────────────────────────
 
   // Before joining: show the preview / join screen

@@ -63,6 +63,7 @@ function socketHandler(ws) {
           if (!room) return;
           
           const existingProducers = [];
+          const existingDataProducers = [];
           Object.entries(room.peers).forEach(([id, peer]) => {
             if (id !== peerId) {
               Object.values(peer.producers).forEach((producer) => {
@@ -73,11 +74,24 @@ function socketHandler(ws) {
                   isScreenShare: producer.appData?.isScreenShare || false,
                 });
               });
+
+              Object.values(peer.dataProducers).forEach((dataProducer) => {
+                existingDataProducers.push({
+                  dataProducerId: dataProducer.id,
+                  peerId: id,
+                  name: peer.name,
+                  label: dataProducer.label,
+                  protocol: dataProducer.protocol,
+                });
+              });
             }
           });
 
           if (existingProducers.length > 0) {
             send(ws, { type: "existingProducers", producers: existingProducers });
+          }
+          if (existingDataProducers.length > 0) {
+            send(ws, { type: "existingDataProducers", dataProducers: existingDataProducers });
           }
           break;
         }
@@ -104,6 +118,7 @@ function socketHandler(ws) {
               iceParameters: transport.iceParameters,
               iceCandidates: transport.iceCandidates,
               dtlsParameters: transport.dtlsParameters,
+              sctpParameters: transport.sctpParameters,
               iceServers: config.turn.iceServers,
             },
           });
@@ -134,6 +149,7 @@ function socketHandler(ws) {
             rtpParameters,
             appData: { isScreenShare: isScreenShare || false },
           });
+          console.log(`Backend: Producer created: ${producer.id}, kind: ${kind}, peer: ${peerId}`);
           peer.producers[producer.id] = producer;
 
           send(ws, { type: "produced", producerId: producer.id, kind });
@@ -146,6 +162,46 @@ function socketHandler(ws) {
             name: peer.name,
             kind,
             isScreenShare: isScreenShare || false,
+          });
+          break;
+        }
+
+        // ─── PRODUCE DATA ───────────────────────────────────────
+        case "produceData": {
+          const {
+            roomId,
+            peerId,
+            transportId,
+            sctpStreamParameters,
+            label,
+            protocol,
+          } = data;
+          const peer = getPeer(roomId, peerId);
+          const transport = peer?.transports[transportId];
+          if (!transport) return;
+
+          const dataProducer = await transport.produceData({
+            sctpStreamParameters,
+            label,
+            protocol,
+          });
+
+          peer.dataProducers[dataProducer.id] = dataProducer;
+
+          send(ws, {
+            type: "dataProduced",
+            dataProducerId: dataProducer.id,
+            label: dataProducer.label,
+            protocol: dataProducer.protocol,
+          });
+
+          broadcast(roomId, peerId, {
+            type: "newDataProducer",
+            dataProducerId: dataProducer.id,
+            peerId,
+            name: peer.name,
+            label: dataProducer.label,
+            protocol: dataProducer.protocol,
           });
           break;
         }
@@ -204,6 +260,7 @@ function socketHandler(ws) {
     rtpCapabilities,
     paused: true,
   });
+  console.log(`Backend: Consumer created: ${consumer.id}, kind: ${consumer.kind}, for producer: ${producerId}`);
 
   // Save consumer
   peer.consumers[consumer.id] = consumer;
@@ -227,10 +284,60 @@ function socketHandler(ws) {
   break;
 }
 
-        // ─── CHAT ───────────────────────────────────────────────
+        // ─── CONSUME DATA ───────────────────────────────────────
+        case "consumeData": {
+          const { roomId, peerId, dataProducerId } = data;
+          const peer = getPeer(roomId, peerId);
+          if (!peer) return;
+
+          const recvTransport = Object.values(peer.transports).find(
+            (transport) => transport.appData && transport.appData.direction === "recv"
+          );
+
+          if (!recvTransport) {
+            console.log("Recv transport not found for data consume");
+            return;
+          }
+
+          const dataConsumer = await recvTransport.consumeData({ dataProducerId });
+          peer.dataConsumers[dataConsumer.id] = dataConsumer;
+
+          send(ws, {
+            type: "dataConsumed",
+            dataConsumerId: dataConsumer.id,
+            dataProducerId,
+            sctpStreamParameters: dataConsumer.sctpStreamParameters,
+            label: dataConsumer.label,
+            protocol: dataConsumer.protocol,
+          });
+          break;
+        }
+
+        // ─── CHAT MESSAGE ────────────────────────────────────────
         case "chat": {
-          const { roomId, peerId, message, sender } = data;
-          broadcast(roomId, peerId, { type: "chat", message, sender });
+          const { roomId, message, sender } = data;
+          const room = getRoom(roomId);
+          if (!room) return;
+
+          broadcast(roomId, undefined, {
+            type: "chat",
+            message,
+            sender,
+          });
+          break;
+        }
+
+        // ─── CHAT MESSAGE ────────────────────────────────────────
+        case "chat": {
+          const { roomId, message, sender } = data;
+          const room = getRoom(roomId);
+          if (!room) return;
+
+          broadcast(roomId, undefined, {
+            type: "chat",
+            message,
+            sender,
+          });
           break;
         }
 

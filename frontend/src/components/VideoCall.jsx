@@ -38,7 +38,12 @@ export default function VideoCall({
     toggleCam,
     switchCamera,
     toggleScreenShare,
+    chatMessages,
+    sendChatMessage,
   } = useMediaSoup(ws, roomId, peerId, name, existingStreamRef);
+
+  const activeMessages = messages.length > 0 ? messages : chatMessages;
+  const handleSendMessage = onSendMessage || sendChatMessage;
 
   const [chatOpen, setChatOpen] = useState(false);
   const [participantsOpen, setParticipantsOpen] = useState(false);
@@ -46,15 +51,15 @@ export default function VideoCall({
   const [elapsedTime, setElapsedTime] = useState(0);
   const [copied, setCopied] = useState(false);
   const [focusedPeerId, setFocusedPeerId] = useState(null);
-  const prevMsgCount = useRef(messages.length);
+  const prevMsgCount = useRef(activeMessages.length);
 
   // Track unread messages when chat is closed
   useEffect(() => {
-    if (!chatOpen && messages.length > prevMsgCount.current) {
-      setUnreadCount((c) => c + (messages.length - prevMsgCount.current));
+    if (!chatOpen && activeMessages.length > prevMsgCount.current) {
+      setUnreadCount((c) => c + (activeMessages.length - prevMsgCount.current));
     }
-    prevMsgCount.current = messages.length;
-  }, [messages.length, chatOpen]);
+    prevMsgCount.current = activeMessages.length;
+  }, [activeMessages.length, chatOpen]);
 
   // Meeting timer
   useEffect(() => {
@@ -263,8 +268,8 @@ export default function VideoCall({
         {chatOpen && (
           <div className="absolute right-0 top-0 bottom-0 z-50 w-full sm:w-80 md:relative md:w-80 shrink-0">
             <SidePanel title="In-call messages" onClose={() => setChatOpen(false)}>
-              <ChatBox messages={messages} currentUser={name} />
-              <MessageInput onSend={onSendMessage} />
+              <ChatBox messages={activeMessages} currentUser={name} />
+              <MessageInput onSend={handleSendMessage} />
             </SidePanel>
           </div>
         )}
