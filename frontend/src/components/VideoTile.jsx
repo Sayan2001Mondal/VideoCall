@@ -26,7 +26,7 @@ export default function VideoTile({
     };
     videoRef.current.onloadedmetadata = playVideo;
     playVideo();
-  }, [stream]);
+  }, [stream, isCameraOff]);
 
   return (
     <div

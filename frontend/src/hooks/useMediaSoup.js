@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as mediasoupClient from "mediasoup-client";
 
-export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef) {
+export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef, wsConnected) {
   const deviceRef = useRef(null);
   const sendTransportRef = useRef(null);
   const recvTransportRef = useRef(null);
@@ -20,11 +20,96 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
   const [camOn, setCamOn] = useState(true);
   const [screenShareOn, setScreenShareOn] = useState(false);
   const [screenStream, setScreenStream] = useState(null);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const sessionInitializedRef = useRef(false);
+  // Tracks whether we have connected at least once — used to distinguish
+  // initial connect from reconnects so we can show the reconnecting banner
+  const hasConnectedBefore = useRef(false);
 
   // ── helpers ────────────────────────────────────────────────────
   function send(data) {
     if (ws.current?.readyState === WebSocket.OPEN)
       ws.current.send(JSON.stringify(data));
+  }
+
+  function waitForSocketMessage(match, timeoutMs = 10000) {
+    const socket = ws.current;
+    if (!socket) return Promise.reject(new Error("WebSocket is not connected"));
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        socket.removeEventListener("message", handleMessage);
+        reject(new Error("Timed out waiting for socket response"));
+      }, timeoutMs);
+
+      const handleMessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (!match(msg)) return;
+          clearTimeout(timer);
+          socket.removeEventListener("message", handleMessage);
+          resolve(msg);
+        } catch (err) {
+          clearTimeout(timer);
+          socket.removeEventListener("message", handleMessage);
+          reject(err);
+        }
+      };
+
+      socket.addEventListener("message", handleMessage);
+    });
+  }
+
+  async function requestPeerResume() {
+    send({ type: "resumePeer", roomId, peerId, name });
+    const msg = await waitForSocketMessage(
+      (payload) =>
+        payload.type === "peerResumed" ||
+        payload.type === "resumeFailed"
+    );
+
+    if (msg.type === "resumeFailed") {
+      throw new Error(msg.reason || "resume-failed");
+    }
+
+    return msg;
+  }
+
+  function resetRemoteState() {
+    setRemoteStreams({});
+    setPeersData({});
+    consumersRef.current = {};
+    dataConsumersRef.current = {};
+  }
+
+  function teardownSession({ preserveLocalStream = true } = {}) {
+    sendTransportRef.current?.close();
+    recvTransportRef.current?.close();
+    dataProducerRef.current?.close?.();
+    Object.values(consumersRef.current).forEach((consumer) => consumer.close?.());
+    Object.values(dataConsumersRef.current).forEach((consumer) => consumer.close?.());
+
+    sendTransportRef.current = null;
+    recvTransportRef.current = null;
+    dataProducerRef.current = null;
+    producersRef.current = {};
+    consumersRef.current = {};
+    dataConsumersRef.current = {};
+    deviceRef.current = null;
+    setScreenShareOn(false);
+    setScreenStream(null);
+    resetRemoteState();
+
+    if (!preserveLocalStream) {
+      localStreamRef.current?.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+      setLocalStream(null);
+    }
+  }
+
+  function requestTransportIceRestart(transport) {
+    if (!transport) return;
+    send({ type: "restartIce", roomId, peerId, transportId: transport.id });
   }
 
   async function createTransport(direction) {
@@ -62,6 +147,13 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
         }
       };
       ws.current.addEventListener("message", h);
+    });
+
+    transport.on("connectionstatechange", (state) => {
+      if (state === "disconnected" || state === "failed") {
+        console.log("Send transport connection state changed to", state, "Restarting ICE...");
+        send({ type: "restartIce", roomId, peerId, transportId: transport.id });
+      }
     });
 
     transport.on("produce", ({ kind, rtpParameters, appData }, cb, eb) => {
@@ -120,6 +212,13 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
         }
       };
       ws.current.addEventListener("message", h);
+    });
+
+    transport.on("connectionstatechange", (state) => {
+      if (state === "disconnected" || state === "failed") {
+        console.log("Recv transport connection state changed to", state, "Restarting ICE...");
+        send({ type: "restartIce", roomId, peerId, transportId: transport.id });
+      }
     });
 
     recvTransportRef.current = transport;
@@ -249,37 +348,12 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
     });
   }
 
-  // ── main init ──────────────────────────────────────────────────
+  // ── SESSION LIFECYCLE: Local Media & Room Presence ──────────────────
   useEffect(() => {
-    if (!ws.current || !roomId || !peerId) return;
+    if (!roomId || !peerId) return;
+    const hasExistingStream = Boolean(existingStreamRef?.current);
 
-    let cleanedUp = false;
-
-    async function init() {
-      const rtpCapabilities = await new Promise((resolve) => {
-        const h = (e) => {
-          const m = JSON.parse(e.data);
-          if (m.type === "routerRtpCapabilities") {
-            ws.current.removeEventListener("message", h);
-            resolve(m.rtpCapabilities);
-          }
-        };
-        ws.current.addEventListener("message", h);
-        send({ type: "join", roomId, peerId, name });
-      });
-
-      if (cleanedUp) return;
-
-      const device = await loadDevice(rtpCapabilities);
-
-      const [sendOpts, recvOpts] = await Promise.all([
-        createTransport("send"),
-        createTransport("recv"),
-      ]);
-
-      await setupSendTransport(device, sendOpts);
-      await setupRecvTransport(device, recvOpts);
-
+    async function setupLocalMedia() {
       let stream;
       if (existingStreamRef?.current) {
         stream = existingStreamRef.current;
@@ -301,6 +375,53 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
 
       const audioTrack = stream.getAudioTracks()[0];
       const videoTrack = stream.getVideoTracks()[0];
+      setMicOn(!!audioTrack);
+      setCamOn(!!videoTrack);
+    }
+
+    setupLocalMedia();
+
+    return () => {
+      send({ type: "leave", roomId, peerId });
+      teardownSession({ preserveLocalStream: hasExistingStream });
+      if (!hasExistingStream) {
+        localStreamRef.current?.getTracks().forEach((t) => t.stop());
+      }
+      sessionInitializedRef.current = false;
+      hasConnectedBefore.current = false;
+      setIsReconnecting(false);
+    };
+  }, [roomId, peerId]);
+
+  // ── CONNECTION LIFECYCLE: MediaSoup Signaling & Transports ────────────
+  useEffect(() => {
+    if (!wsConnected || !ws.current || !roomId || !peerId) return;
+
+    let cleanedUp = false;
+    const socket = ws.current;
+
+    async function init() {
+      send({ type: "join", roomId, peerId, name });
+      const capabilitiesMessage = await waitForSocketMessage(
+        (message) => message.type === "routerRtpCapabilities"
+      );
+      const rtpCapabilities = capabilitiesMessage.rtpCapabilities;
+
+      if (cleanedUp) return;
+
+      const device = await loadDevice(rtpCapabilities);
+
+      const [sendOpts, recvOpts] = await Promise.all([
+        createTransport("send"),
+        createTransport("recv"),
+      ]);
+
+      await setupSendTransport(device, sendOpts);
+      await setupRecvTransport(device, recvOpts);
+
+      const stream = localStreamRef.current || new MediaStream();
+      const audioTrack = stream.getAudioTracks()[0];
+      const videoTrack = stream.getVideoTracks()[0];
 
       if (audioTrack) {
         const audioProducer = await sendTransportRef.current.produce({ track: audioTrack });
@@ -319,105 +440,161 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
           protocol: "json",
         });
         dataProducerRef.current = dataProducer;
-        console.log("Frontend: Data producer created successfully!");
       } catch (err) {
         console.error("Failed to create data producer:", err);
       }
+
+      sessionInitializedRef.current = true;
     }
 
     const messageHandler = async (e) => {
-      const msg = JSON.parse(e.data);
+      try {
+        const msg = JSON.parse(e.data);
 
-      if (msg.type === "newProducer") {
-        setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name } }));
-        await consumeProducer(msg.producerId, msg.peerId, msg.isScreenShare);
-      }
-
-      if (msg.type === "existingProducers") {
-        for (const { producerId, peerId: sourcePeerId, name: sourceName, isScreenShare } of msg.producers) {
-          setPeersData((prev) => ({ ...prev, [sourcePeerId]: { name: sourceName } }));
-          await consumeProducer(producerId, sourcePeerId, isScreenShare);
+        if (msg.type === "iceRestarted") {
+          const transport = sendTransportRef.current?.id === msg.transportId
+            ? sendTransportRef.current
+            : recvTransportRef.current?.id === msg.transportId
+              ? recvTransportRef.current
+              : null;
+          if (transport) {
+            console.log("Applying new ICE parameters for transport", transport.id);
+            await transport.restartIce({ iceParameters: msg.iceParameters });
+          }
         }
-      }
 
-      if (msg.type === "newDataProducer") {
-        setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name } }));
-        await consumeDataProducer(msg.dataProducerId, msg.peerId, msg.name);
-      }
-
-      if (msg.type === "existingDataProducers") {
-        for (const { dataProducerId, peerId: sourcePeerId, name: sourceName } of msg.dataProducers) {
-          setPeersData((prev) => ({ ...prev, [sourcePeerId]: { name: sourceName } }));
-          await consumeDataProducer(dataProducerId, sourcePeerId, sourceName);
+        if (msg.type === "newProducer") {
+          setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name, camOn: true, micOn: true } }));
+          await consumeProducer(msg.producerId, msg.peerId, msg.isScreenShare);
         }
-      }
 
-      if (msg.type === "peerLeft") {
-        setRemoteStreams((prev) => {
-          const updated = { ...prev };
-          delete updated[msg.peerId];
-          delete updated[`${msg.peerId}-screen`];
-          return updated;
-        });
-        setPeersData((prev) => {
-          const updated = { ...prev };
-          delete updated[msg.peerId];
-          return updated;
-        });
-      }
+        if (msg.type === "existingProducers") {
+          for (const { producerId, peerId: sourcePeerId, name: sourceName, isScreenShare } of msg.producers) {
+            setPeersData((prev) => ({ ...prev, [sourcePeerId]: { name: sourceName, camOn: true, micOn: true } }));
+            await consumeProducer(producerId, sourcePeerId, isScreenShare);
+          }
+        }
 
-      if (msg.type === "peerJoined") {
-        setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name } }));
-      }
+        if (msg.type === "newDataProducer") {
+          setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name, camOn: true, micOn: true } }));
+          await consumeDataProducer(msg.dataProducerId, msg.peerId, msg.name);
+        }
 
-      if (msg.type === "screenShareStopped") {
-        setRemoteStreams((prev) => {
-          const updated = { ...prev };
-          delete updated[`${msg.peerId}-screen`];
-          return updated;
-        });
+        if (msg.type === "existingDataProducers") {
+          for (const { dataProducerId, peerId: sourcePeerId, name: sourceName } of msg.dataProducers) {
+            setPeersData((prev) => ({ ...prev, [sourcePeerId]: { name: sourceName, camOn: true, micOn: true } }));
+            await consumeDataProducer(dataProducerId, sourcePeerId, sourceName);
+          }
+        }
+
+        if (msg.type === "peerLeft") {
+          setRemoteStreams((prev) => {
+            const updated = { ...prev };
+            delete updated[msg.peerId];
+            delete updated[`${msg.peerId}-screen`];
+            return updated;
+          });
+          setPeersData((prev) => {
+            const updated = { ...prev };
+            delete updated[msg.peerId];
+            return updated;
+          });
+        }
+
+        if (msg.type === "peerJoined") {
+          setPeersData((prev) => ({ ...prev, [msg.peerId]: { name: msg.name, camOn: true, micOn: true } }));
+        }
+
+        if (msg.type === "mediaToggled") {
+          setPeersData((prev) => ({
+            ...prev,
+            [msg.peerId]: {
+              ...prev[msg.peerId],
+              [msg.kind === "video" ? "camOn" : "micOn"]: msg.enabled,
+            },
+          }));
+        }
+
+        if (msg.type === "screenShareStopped") {
+          setRemoteStreams((prev) => {
+            const updated = { ...prev };
+            delete updated[`${msg.peerId}-screen`];
+            return updated;
+          });
+        }
+      } catch (err) {
+        console.error("Error in useMediaSoup message handler:", err);
       }
     };
 
-    async function initAndListen() {
-      await init();
-      if (cleanedUp) return;
-      ws.current.addEventListener("message", messageHandler);
-      send({ type: "getProducers", roomId, peerId });
+    async function connectSession() {
+      socket.addEventListener("message", messageHandler);
+
+      try {
+        if (
+          hasConnectedBefore.current &&
+          sessionInitializedRef.current &&
+          sendTransportRef.current &&
+          recvTransportRef.current
+        ) {
+          setIsReconnecting(true);
+          await requestPeerResume();
+          if (cleanedUp) return;
+
+          requestTransportIceRestart(sendTransportRef.current);
+          requestTransportIceRestart(recvTransportRef.current);
+          setIsReconnecting(false);
+          return;
+        }
+
+        await init();
+        if (cleanedUp) return;
+        hasConnectedBefore.current = true;
+        setIsReconnecting(false);
+        send({ type: "getProducers", roomId, peerId });
+      } catch (err) {
+        console.warn("Session resume failed, falling back to full rejoin:", err);
+        teardownSession({ preserveLocalStream: true });
+        await init();
+        if (cleanedUp) return;
+        hasConnectedBefore.current = true;
+        setIsReconnecting(false);
+        send({ type: "getProducers", roomId, peerId });
+      }
     }
 
-    initAndListen().catch(console.error);
+    connectSession().catch(console.error);
 
     return () => {
       cleanedUp = true;
-      ws.current?.removeEventListener("message", messageHandler);
-      sendTransportRef.current?.close();
-      recvTransportRef.current?.close();
-      dataProducerRef.current?.close?.();
-      Object.values(dataConsumersRef.current).forEach((consumer) => consumer.close?.());
-      if (!existingStreamRef?.current) {
-        localStreamRef.current?.getTracks().forEach((t) => t.stop());
-      }
-      send({ type: "leave", roomId, peerId });
+      socket.removeEventListener("message", messageHandler);
     };
-  }, [roomId, peerId]);
+  }, [wsConnected, roomId, peerId]);
 
   // ── toggles ────────────────────────────────────────────────────
-  const toggleMic = useCallback(() => {
-    const producer = producersRef.current.audio;
-    if (!producer) return;
-    if (micOn) producer.pause(); else producer.resume();
-    localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !micOn));
-    setMicOn((v) => !v);
-  }, [micOn]);
+    const toggleMic = useCallback(() => {
+      const producer = producersRef.current.audio;
+      if (!producer) return;
+      if (micOn) producer.pause(); else producer.resume();
+      localStreamRef.current?.getAudioTracks().forEach((t) => (t.enabled = !micOn));
+      setMicOn((v) => {
+        const newState = !v;
+        send({ type: "mediaToggled", roomId, peerId, kind: "audio", enabled: newState });
+        return newState;
+      });
+    }, [micOn, roomId, peerId]);
 
-  const toggleCam = useCallback(() => {
-    const producer = producersRef.current.video;
-    if (!producer) return;
-    if (camOn) producer.pause(); else producer.resume();
-    localStreamRef.current?.getVideoTracks().forEach((t) => (t.enabled = !camOn));
-    setCamOn((v) => !v);
-  }, [camOn]);
+    const toggleCam = useCallback(() => {
+      const producer = producersRef.current.video;
+      if (!producer) return;
+      if (camOn) producer.pause(); else producer.resume();
+      localStreamRef.current?.getVideoTracks().forEach((t) => (t.enabled = !camOn));
+      setCamOn((v) => {
+        const newState = !v;
+        send({ type: "mediaToggled", roomId, peerId, kind: "video", enabled: newState });
+        return newState;
+      });
+    }, [camOn, roomId, peerId]);
 
   const switchCamera = useCallback(async () => {
     const producer = producersRef.current.video;
@@ -525,5 +702,6 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
     toggleScreenShare,
     chatMessages,
     sendChatMessage,
+    isReconnecting,
   };
-}
+}           

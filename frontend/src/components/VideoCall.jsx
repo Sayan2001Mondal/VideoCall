@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Copy, Check, Clock } from "lucide-react";
+import { Copy, Check, Clock, WifiOff, Wifi } from "lucide-react";
 import useMediaSoup from "../hooks/useMediaSoup";
 import useKeyboardShortcut from "../hooks/useKeyboardShortcut";
 import VideoTile from "./VideoTile";
@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 
 export default function VideoCall({
   ws,
+  wsConnected,
   roomId,
   peerId,
   name,
@@ -40,7 +41,8 @@ export default function VideoCall({
     toggleScreenShare,
     chatMessages,
     sendChatMessage,
-  } = useMediaSoup(ws, roomId, peerId, name, existingStreamRef);
+    isReconnecting,
+  } = useMediaSoup(ws, roomId, peerId, name, existingStreamRef, wsConnected);
 
   const activeMessages = messages.length > 0 ? messages : chatMessages;
   const handleSendMessage = onSendMessage || sendChatMessage;
@@ -107,19 +109,17 @@ export default function VideoCall({
   };
 
   // Build participant lists for layout
-  const cameraStreams = {};
   const screenShares = {};
   Object.entries(remoteStreams).forEach(([key, stream]) => {
     if (key.endsWith("-screen")) screenShares[key] = stream;
-    else cameraStreams[key] = stream;
   });
 
   const allParticipants = [
     { pid: "local", stream: localStream, name: name, isLocal: true },
-    ...Object.entries(cameraStreams).map(([pid, stream]) => ({
+    ...Object.entries(peersData).map(([pid, data]) => ({
       pid,
-      stream,
-      name: peersData[pid]?.name,
+      stream: remoteStreams[pid],
+      name: data.name,
       isLocal: false,
     })),
   ];
@@ -165,20 +165,28 @@ export default function VideoCall({
   }
 
 
-  const renderTile = (p) => (
-    <VideoTile
-      key={p.pid}
-      stream={p.stream}
-      name={p.name}
-      isLocal={p.isLocal}
-      isScreenShare={p.isScreenShare}
-      onClick={() => handleTileClick(p.pid)}
-      className={cn(
-        "w-full h-full aspect-video",
-        focusedPeerId === p.pid && "ring-4 ring-primary-500"
-      )}
-    />
-  );
+  const renderTile = (p) => {
+    const isLocal = p.isLocal;
+    const isCameraOff = isLocal ? !camOn : !(peersData[p.pid]?.camOn ?? true);
+    const isMuted = isLocal ? !micOn : !(peersData[p.pid]?.micOn ?? true);
+
+    return (
+      <VideoTile
+        key={p.pid}
+        stream={p.stream}
+        name={p.name}
+        isLocal={isLocal}
+        isCameraOff={isCameraOff}
+        isMuted={isMuted}
+        isScreenShare={p.isScreenShare}
+        onClick={() => handleTileClick(p.pid)}
+        className={cn(
+          "w-full h-full aspect-video",
+          focusedPeerId === p.pid && "ring-4 ring-primary-500"
+        )}
+      />
+    );
+  };
 
   const renderOthers = (mainPid) => {
     const others = [
@@ -197,6 +205,21 @@ export default function VideoCall({
 
   return (
     <div className="fixed inset-0 bg-surface-100 flex flex-col z-40">
+      {/* ── RECONNECTING BANNER ───────────────────────────── */}
+      {!wsConnected && (
+        <div className="absolute top-0 inset-x-0 z-50 flex items-center justify-center gap-2
+                        bg-red-500/90 backdrop-blur-sm text-white text-sm font-medium py-2">
+          <WifiOff size={15} />
+          <span>Connection lost — reconnecting…</span>
+        </div>
+      )}
+      {wsConnected && isReconnecting && (
+        <div className="absolute top-0 inset-x-0 z-50 flex items-center justify-center gap-2
+                        bg-amber-500/90 backdrop-blur-sm text-white text-sm font-medium py-2">
+          <Wifi size={15} className="animate-pulse" />
+          <span>Reconnected — restoring session…</span>
+        </div>
+      )}
       {/* ── TOP BAR ──────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-2 bg-white/80 backdrop-blur-sm border-b border-border z-20">
         <div className="flex items-center gap-3">
@@ -301,4 +324,4 @@ export default function VideoCall({
       />
     </div>
   );
-}
+} 

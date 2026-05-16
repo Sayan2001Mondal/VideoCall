@@ -3,6 +3,7 @@ const config = require("../config/mediasoup");
 
 // rooms[roomId] = { router, peers: { peerId: { ws, transports, producers, consumers, dataProducers, dataConsumers } } }
 const rooms = {};
+const RECONNECT_GRACE_MS = 15000;
 
 async function getOrCreateRoom(roomId) {
   if (!rooms[roomId]) {
@@ -24,8 +25,42 @@ function addPeer(roomId, peerId, ws) {
       consumers: {},
       dataProducers: {},
       dataConsumers: {},
+      disconnectedAt: null,
+      cleanupTimer: null,
     };
   }
+}
+
+function clearPeerCleanup(peer) {
+  if (!peer?.cleanupTimer) return;
+  clearTimeout(peer.cleanupTimer);
+  peer.cleanupTimer = null;
+}
+
+function markPeerDisconnected(roomId, peerId, onExpire) {
+  const peer = rooms[roomId]?.peers[peerId];
+  if (!peer) return null;
+
+  peer.disconnectedAt = Date.now();
+  clearPeerCleanup(peer);
+  peer.cleanupTimer = setTimeout(() => {
+    const latestPeer = rooms[roomId]?.peers[peerId];
+    if (!latestPeer || !latestPeer.disconnectedAt) return;
+    if (typeof onExpire === "function") onExpire(roomId, peerId, latestPeer);
+    removePeer(roomId, peerId);
+  }, RECONNECT_GRACE_MS);
+
+  return peer;
+}
+
+function resumePeer(roomId, peerId, ws) {
+  const peer = rooms[roomId]?.peers[peerId];
+  if (!peer) return null;
+
+  clearPeerCleanup(peer);
+  peer.ws = ws;
+  peer.disconnectedAt = null;
+  return peer;
 }
 
 function removePeer(roomId, peerId) {
@@ -35,6 +70,7 @@ function removePeer(roomId, peerId) {
   const peer = room.peers[peerId];
   if (!peer) return;
 
+  clearPeerCleanup(peer);
   // Close all transports (closes producers/consumers too)
   Object.values(peer.transports).forEach((t) => t.close());
   delete room.peers[peerId];
@@ -62,4 +98,14 @@ function getOtherPeers(roomId, peerId) {
     .map(([id, peer]) => ({ peerId: id, name: peer.name }));
 }
 
-module.exports = { getOrCreateRoom, addPeer, removePeer, getPeer, getRoom, getOtherPeers };
+module.exports = {
+  getOrCreateRoom,
+  addPeer,
+  markPeerDisconnected,
+  removePeer,
+  resumePeer,
+  getPeer,
+  getRoom,
+  getOtherPeers,
+  RECONNECT_GRACE_MS,
+};

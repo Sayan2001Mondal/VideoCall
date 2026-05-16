@@ -1,15 +1,30 @@
 const {
   getOrCreateRoom,
   addPeer,
+  markPeerDisconnected,
   removePeer,
+  resumePeer,
   getPeer,
   getRoom,
   getOtherPeers,
+  RECONNECT_GRACE_MS,
 } = require("./roomManager");
 const config = require("../config/mediasoup");
 
 function send(ws, data) {
   if (ws.readyState === 1) ws.send(JSON.stringify(data));
+}
+
+function logInfo(message, meta = {}) {
+  console.log(`[socket] ${message}`, meta);
+}
+
+function logWarn(message, meta = {}) {
+  console.warn(`[socket] ${message}`, meta);
+}
+
+function logError(message, meta = {}) {
+  console.error(`[socket] ${message}`, meta);
 }
 
 function broadcast(roomId, peerId, data) {
@@ -35,9 +50,22 @@ function socketHandler(ws) {
           myRoomId = roomId;
           myPeerId = peerId;
 
-          const room = await getOrCreateRoom(roomId);
+          let room = await getOrCreateRoom(roomId);
+          
+          // If the peer already exists (e.g. ungraceful disconnect where close didn't fire),
+          // clean them up first so other clients drop the frozen tracks.
+          if (room.peers[peerId]) {
+            logInfo("Peer rejoining, cleaning up old state", { roomId, peerId });
+            broadcast(roomId, peerId, { type: "peerLeft", peerId });
+            removePeer(roomId, peerId);
+            
+            // Re-fetch room because removePeer deletes it if it becomes empty!
+            room = await getOrCreateRoom(roomId);
+          }
+
           addPeer(roomId, peerId, ws);
           room.peers[peerId].name = name;
+          logInfo("Peer joined room", { roomId, peerId, name });
 
           // Send RTP capabilities so client can create device
           send(ws, {
@@ -56,11 +84,39 @@ function socketHandler(ws) {
           break;
         }
 
+        case "resumePeer": {
+          const { roomId, peerId, name } = data;
+          myRoomId = roomId;
+          myPeerId = peerId;
+
+          const room = getRoom(roomId);
+          if (!room) {
+            send(ws, { type: "resumeFailed", reason: "room-not-found" });
+            logWarn("Peer resume failed: room not found", { roomId, peerId });
+            return;
+          }
+
+          const peer = resumePeer(roomId, peerId, ws);
+          if (!peer) {
+            send(ws, { type: "resumeFailed", reason: "peer-not-found" });
+            logWarn("Peer resume failed: peer not found", { roomId, peerId });
+            return;
+          }
+
+          if (name) peer.name = name;
+          send(ws, { type: "peerResumed", roomId, peerId });
+          logInfo("Peer session resumed", { roomId, peerId, name: peer.name });
+          break;
+        }
+
         // ─── GET PRODUCERS ──────────────────────────────────────
         case "getProducers": {
           const { roomId, peerId } = data;
           const room = getRoom(roomId);
-          if (!room) return;
+          if (!room) {
+            logWarn("getProducers failed: room not found", { roomId, peerId });
+            return;
+          }
           
           const existingProducers = [];
           const existingDataProducers = [];
@@ -93,6 +149,12 @@ function socketHandler(ws) {
           if (existingDataProducers.length > 0) {
             send(ws, { type: "existingDataProducers", dataProducers: existingDataProducers });
           }
+          logInfo("Sent existing producers", {
+            roomId,
+            peerId,
+            mediaProducers: existingProducers.length,
+            dataProducers: existingDataProducers.length,
+          });
           break;
         }
 
@@ -100,7 +162,10 @@ function socketHandler(ws) {
         case "createTransport": {
           const { roomId, peerId, direction } = data;
           const room = getRoom(roomId);
-          if (!room) return;
+          if (!room) {
+            logWarn("createTransport failed: room not found", { roomId, peerId, direction });
+            return;
+          }
 
           const transport = await room.router.createWebRtcTransport({
             ...config.webRtcTransport,
@@ -108,6 +173,10 @@ function socketHandler(ws) {
           });
           
           const peer = getPeer(roomId, peerId);
+          if (!peer) {
+            logWarn("createTransport failed: peer not found", { roomId, peerId, direction });
+            return;
+          }
           peer.transports[transport.id] = transport;
 
           send(ws, {
@@ -122,6 +191,7 @@ function socketHandler(ws) {
               iceServers: config.turn.iceServers,
             },
           });
+          logInfo("Transport created", { roomId, peerId, direction, transportId: transport.id });
           break;
         }
 
@@ -130,10 +200,34 @@ function socketHandler(ws) {
           const { roomId, peerId, transportId, dtlsParameters } = data;
           const peer = getPeer(roomId, peerId);
           const transport = peer?.transports[transportId];
-          if (!transport) return;
+          if (!transport) {
+            logWarn("connectTransport failed: transport not found", { roomId, peerId, transportId });
+            return;
+          }
 
           await transport.connect({ dtlsParameters });
           send(ws, { type: "transportConnected", transportId });
+          logInfo("Transport connected", { roomId, peerId, transportId });
+          break;
+        }
+
+        // ─── RESTART ICE ────────────────────────────────────────
+        case "restartIce": {
+          const { roomId, peerId, transportId } = data;
+          const peer = getPeer(roomId, peerId);
+          const transport = peer?.transports[transportId];
+          if (!transport) {
+            logWarn("restartIce failed: transport not found", { roomId, peerId, transportId });
+            return;
+          }
+
+          try {
+            const iceParameters = await transport.restartIce();
+            send(ws, { type: "iceRestarted", transportId, iceParameters });
+            logInfo("ICE restarted", { roomId, peerId, transportId });
+          } catch (err) {
+            logError("Error restarting ICE", { roomId, peerId, transportId, error: err.message });
+          }
           break;
         }
 
@@ -142,15 +236,30 @@ function socketHandler(ws) {
           const { roomId, peerId, transportId, kind, rtpParameters, isScreenShare } = data;
           const peer = getPeer(roomId, peerId);
           const transport = peer?.transports[transportId];
-          if (!transport) return;
+          if (!transport) {
+            logWarn("produce failed: transport not found", {
+              roomId,
+              peerId,
+              transportId,
+              kind,
+              isScreenShare: Boolean(isScreenShare),
+            });
+            return;
+          }
 
           const producer = await transport.produce({
             kind,
             rtpParameters,
             appData: { isScreenShare: isScreenShare || false },
           });
-          console.log(`Backend: Producer created: ${producer.id}, kind: ${kind}, peer: ${peerId}`);
           peer.producers[producer.id] = producer;
+          logInfo("Producer created", {
+            roomId,
+            peerId,
+            producerId: producer.id,
+            kind,
+            isScreenShare: Boolean(isScreenShare),
+          });
 
           send(ws, { type: "produced", producerId: producer.id, kind });
 
@@ -178,7 +287,16 @@ function socketHandler(ws) {
           } = data;
           const peer = getPeer(roomId, peerId);
           const transport = peer?.transports[transportId];
-          if (!transport) return;
+          if (!transport) {
+            logWarn("produceData failed: transport not found", {
+              roomId,
+              peerId,
+              transportId,
+              label,
+              protocol,
+            });
+            return;
+          }
 
           const dataProducer = await transport.produceData({
             sctpStreamParameters,
@@ -187,6 +305,13 @@ function socketHandler(ws) {
           });
 
           peer.dataProducers[dataProducer.id] = dataProducer;
+          logInfo("Data producer created", {
+            roomId,
+            peerId,
+            dataProducerId: dataProducer.id,
+            label: dataProducer.label,
+            protocol: dataProducer.protocol,
+          });
 
           send(ws, {
             type: "dataProduced",
@@ -213,31 +338,23 @@ function socketHandler(ws) {
   const room = getRoom(roomId);
 
   if (!room) {
-    console.log("Room not found");
+    logWarn("consume failed: room not found", { roomId, peerId, producerId });
     return;
   }
 
   const peer = getPeer(roomId, peerId);
 
   if (!peer) {
-    console.log("Peer not found");
+    logWarn("consume failed: peer not found", { roomId, peerId, producerId });
     return;
   }
-
-  console.log(
-  "ALL TRANSPORTS:",
-  Object.values(peer.transports).map((t) => ({
-    id: t.id,
-    appData: t.appData,
-  }))
-);
   // Find recv transport
   const recvTransport = Object.values(peer.transports).find(
     (t) => t.appData && t.appData.direction === "recv"
   );
 
   if (!recvTransport) {
-    console.log("Recv transport not found");
+    logWarn("consume failed: recv transport not found", { roomId, peerId, producerId });
     return;
   }
 
@@ -248,11 +365,11 @@ function socketHandler(ws) {
       rtpCapabilities,
     })
   ) {
-    console.log("Cannot consume producer:", producerId);
+    logWarn("consume failed: router cannot consume producer", { roomId, peerId, producerId });
     return;
   }
 
-  console.log("Creating consumer for producer:", producerId);
+  logInfo("Creating consumer", { roomId, peerId, producerId });
 
   // Create consumer PAUSED first
   const consumer = await recvTransport.consume({
@@ -260,10 +377,16 @@ function socketHandler(ws) {
     rtpCapabilities,
     paused: true,
   });
-  console.log(`Backend: Consumer created: ${consumer.id}, kind: ${consumer.kind}, for producer: ${producerId}`);
 
   // Save consumer
   peer.consumers[consumer.id] = consumer;
+  logInfo("Consumer created", {
+    roomId,
+    peerId,
+    producerId,
+    consumerId: consumer.id,
+    kind: consumer.kind,
+  });
 
   // Send consumer params to client
   send(ws, {
@@ -274,12 +397,9 @@ function socketHandler(ws) {
     rtpParameters: consumer.rtpParameters,
   });
 
-  console.log("Consumer created:", consumer.id);
-
   // Resume after sending to client
   await consumer.resume();
-
-  console.log("Consumer resumed:", consumer.id);
+  logInfo("Consumer resumed", { roomId, peerId, producerId, consumerId: consumer.id });
 
   break;
 }
@@ -288,19 +408,30 @@ function socketHandler(ws) {
         case "consumeData": {
           const { roomId, peerId, dataProducerId } = data;
           const peer = getPeer(roomId, peerId);
-          if (!peer) return;
+          if (!peer) {
+            logWarn("consumeData failed: peer not found", { roomId, peerId, dataProducerId });
+            return;
+          }
 
           const recvTransport = Object.values(peer.transports).find(
             (transport) => transport.appData && transport.appData.direction === "recv"
           );
 
           if (!recvTransport) {
-            console.log("Recv transport not found for data consume");
+            logWarn("consumeData failed: recv transport not found", { roomId, peerId, dataProducerId });
             return;
           }
 
           const dataConsumer = await recvTransport.consumeData({ dataProducerId });
           peer.dataConsumers[dataConsumer.id] = dataConsumer;
+          logInfo("Data consumer created", {
+            roomId,
+            peerId,
+            dataProducerId,
+            dataConsumerId: dataConsumer.id,
+            label: dataConsumer.label,
+            protocol: dataConsumer.protocol,
+          });
 
           send(ws, {
             type: "dataConsumed",
@@ -317,27 +448,17 @@ function socketHandler(ws) {
         case "chat": {
           const { roomId, message, sender } = data;
           const room = getRoom(roomId);
-          if (!room) return;
+          if (!room) {
+            logWarn("chat failed: room not found", { roomId, sender });
+            return;
+          }
 
           broadcast(roomId, undefined, {
             type: "chat",
             message,
             sender,
           });
-          break;
-        }
-
-        // ─── CHAT MESSAGE ────────────────────────────────────────
-        case "chat": {
-          const { roomId, message, sender } = data;
-          const room = getRoom(roomId);
-          if (!room) return;
-
-          broadcast(roomId, undefined, {
-            type: "chat",
-            message,
-            sender,
-          });
+          logInfo("Chat broadcasted", { roomId, sender, messageLength: String(message || "").length });
           break;
         }
 
@@ -348,29 +469,73 @@ function socketHandler(ws) {
             type: "screenShareStopped",
             peerId,
           });
+          logInfo("Screen share stopped", { roomId, peerId });
           break;
         }
+
+        case "mediaToggled": {
+          const { roomId, peerId, kind, enabled } = data;
+          broadcast(roomId, peerId, {
+            type: "mediaToggled",
+            peerId,
+            kind,
+            enabled,
+          });
+          logInfo("Media toggled", { roomId, peerId, kind, enabled });
+          break;
+        }
+
+
 
         // ─── LEAVE ──────────────────────────────────────────────
         case "leave": {
           if (myRoomId && myPeerId) {
-            broadcast(myRoomId, myPeerId, { type: "peerLeft", peerId: myPeerId });
-            removePeer(myRoomId, myPeerId);
+            const room = getRoom(myRoomId);
+            const peer = room?.peers[myPeerId];
+            if (peer && peer.ws === ws) {
+              broadcast(myRoomId, myPeerId, { type: "peerLeft", peerId: myPeerId });
+              removePeer(myRoomId, myPeerId);
+              logInfo("Peer left room", { roomId: myRoomId, peerId: myPeerId });
+            }
+          } else {
+            logWarn("Leave received without active room context");
           }
           break;
         }
       }
     } catch (err) {
-      console.error(`Error handling [${data.type}]:`, err);
+      logError(`Error handling [${data.type}]`, {
+        roomId: data.roomId,
+        peerId: data.peerId,
+        error: err.message,
+      });
     }
   });
 
   ws.on("close", () => {
     if (myRoomId && myPeerId) {
-      broadcast(myRoomId, myPeerId, { type: "peerLeft", peerId: myPeerId });
-      removePeer(myRoomId, myPeerId);
+      const room = getRoom(myRoomId);
+      const peer = room?.peers[myPeerId];
+      if (peer && peer.ws === ws) {
+        markPeerDisconnected(myRoomId, myPeerId, (roomId, peerId) => {
+          broadcast(roomId, peerId, { type: "peerLeft", peerId });
+          logInfo("Peer cleanup expired after disconnect", {
+            roomId,
+            peerId,
+            graceMs: RECONNECT_GRACE_MS,
+          });
+        });
+        logInfo("Peer disconnected, waiting for resume", {
+          roomId: myRoomId,
+          peerId: myPeerId,
+          graceMs: RECONNECT_GRACE_MS,
+        });
+      } else {
+        logInfo("Old socket disconnected, skipping cleanup as peer reconnected", { roomId: myRoomId, peerId: myPeerId });
+      }
+    } else {
+      logInfo("Socket disconnected before room join");
     }
-    console.log("Peer disconnected");
   });
 }
 

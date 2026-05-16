@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { v4 as uuidv4 } from "uuid";
 import useSocket from "../hooks/useSocket";
 import useDevicePreview from "../hooks/useDevicePreview";
@@ -10,12 +10,43 @@ import VideoCall from "../components/VideoCall";
 
 function PageClient() {
   // ── State ──────────────────────────────────────────────────────
-  const [name, setName] = useState("");
-  const [roomId, setRoomId] = useState("");
-  const [joined, setJoined] = useState(false);
-  const [peerId] = useState(() => uuidv4());
-  const [messages, setMessages] = useState([]);
+  const [name, setName] = useState(() => {
+    if (typeof window !== "undefined") return sessionStorage.getItem("meetup_name") || "";
+    return "";
+  });
+  const [roomId, setRoomId] = useState(() => {
+    if (typeof window !== "undefined") return sessionStorage.getItem("meetup_roomId") || "";
+    return "";
+  });
+  const [joined, setJoined] = useState(() => {
+    if (typeof window !== "undefined") return sessionStorage.getItem("meetup_joined") === "true";
+    return false;
+  });
+  const [peerId] = useState(() => {
+    if (typeof window !== "undefined") {
+      const stored = sessionStorage.getItem("meetup_peerId");
+      if (stored) return stored;
+      const newId = uuidv4();
+      sessionStorage.setItem("meetup_peerId", newId);
+      return newId;
+    }
+    return uuidv4();
+  });
+  const [messages, setMessages] = useState(() => {
+    if (typeof window !== "undefined") {
+      const stored = sessionStorage.getItem("meetup_messages");
+      if (stored) return JSON.parse(stored);
+    }
+    return [];
+  });
   const [wsConnected, setWsConnected] = useState(false);
+
+  // Persist messages whenever they update
+  useEffect(() => {
+    if (messages.length > 0 && typeof window !== "undefined") {
+      sessionStorage.setItem("meetup_messages", JSON.stringify(messages));
+    }
+  }, [messages]);
 
   // ── WebSocket ──────────────────────────────────────────────────
   const ws = useSocket((data) => {
@@ -49,24 +80,35 @@ function PageClient() {
     toggleCam: previewToggleCam,
     cleanup: cleanupPreview,
     stopAllTracks,
-  } = useDevicePreview();
+  } = useDevicePreview(!joined);
 
   // ── Join handler ───────────────────────────────────────────────
   const handleJoin = () => {
-  if (!name.trim() || !roomId.trim()) return;
-  if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
-  cleanupPreview();
-  setJoined(true);
-};
+    if (!name.trim() || !roomId.trim()) return;
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("meetup_name", name);
+      sessionStorage.setItem("meetup_roomId", roomId);
+      sessionStorage.setItem("meetup_joined", "true");
+    }
+    
+    cleanupPreview();
+    setJoined(true);
+  };
 
     // Clean up audio monitoring but keep the stream
     
 
   // ── Leave handler ──────────────────────────────────────────────
   const handleLeave = () => {
-  setJoined(false);
-  window.location.reload();
-};
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem("meetup_joined");
+      sessionStorage.removeItem("meetup_messages");
+    }
+    setJoined(false);
+    window.location.reload();
+  };
   // ── RENDER ─────────────────────────────────────────────────────
 
   // Before joining: show the preview / join screen
@@ -95,6 +137,7 @@ function PageClient() {
   return (
     <VideoCall
       ws={ws}
+      wsConnected={wsConnected}
       roomId={roomId}
       peerId={peerId}
       name={name}

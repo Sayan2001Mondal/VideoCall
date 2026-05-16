@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-export default function useDevicePreview() {
+export default function useDevicePreview(enabled = true) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const analyserRef = useRef(null);
@@ -82,6 +82,8 @@ export default function useDevicePreview() {
   // ✅ Async logic inlined directly — no useCallback wrapper,
   //    so React Compiler doesn't treat setState calls as synchronous-in-effect
   useEffect(() => {
+    if (!enabled) return;
+
     async function startMedia() {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -146,7 +148,7 @@ export default function useDevicePreview() {
         analyserRef.current.audioCtx.close().catch(() => {});
       }
     };
-  }, [setupAudioMonitor]);
+  }, [setupAudioMonitor, enabled]);
 
   return {
     videoRef,

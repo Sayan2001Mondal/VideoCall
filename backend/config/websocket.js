@@ -6,7 +6,7 @@ function setupWebSocket(server){
     const wss = new WebSocketServer({server, path: "/ws/test"})
 
     wss.on("connection", (ws) => {
-        console.log("User Connected");
+        console.log("[socket] Client connected to /ws/test");
 
         socketHandler(ws)
     })
