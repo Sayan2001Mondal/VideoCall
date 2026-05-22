@@ -37,12 +37,12 @@ export default function ControlBar({
   return (
     <div
       className="absolute bottom-0 left-0 right-0 flex items-center justify-center
-                  py-4 px-4 z-30"
+                  py-6 px-4 z-30"
     >
       <div
-        className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 px-4 sm:px-6 py-3 rounded-2xl
-                    bg-white/90 backdrop-blur-xl border border-border
-                    shadow-xl shadow-black/10 max-w-full"
+        className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 px-6 sm:px-8 py-4 rounded-3xl
+                    bg-surface-200/60 backdrop-blur-2xl border border-white/10
+                    shadow-2xl shadow-black/50 max-w-full"
       >
         {/* Mic */}
         <Tooltip content={micOn ? "Mute mic (Alt+M)" : "Unmute mic (Alt+M)"}>

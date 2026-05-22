@@ -77,7 +77,7 @@ export default function EmojiPicker({ onSelect, onClose }) {
     <div
       ref={pickerRef}
       className="absolute bottom-full left-0 mb-2 w-72 max-h-80 rounded-2xl overflow-hidden
-                  bg-white border border-border shadow-2xl shadow-black/10
+                  bg-surface-200 border border-border shadow-2xl shadow-black/10
                   animate-[slideUp_0.2s_ease-out] flex flex-col z-50"
     >
       <div className="p-2 border-b border-border">

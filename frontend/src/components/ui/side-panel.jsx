@@ -19,7 +19,7 @@ const SidePanel = React.forwardRef(
       <div
         ref={ref}
         className={cn(
-          "flex flex-col h-full bg-white border-l border-border",
+          "flex flex-col h-full bg-surface-200 border-l border-border",
           "animate-[slideInRight_0.25s_ease-out]",
           "shadow-xl",
           className

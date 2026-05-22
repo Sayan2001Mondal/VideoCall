@@ -31,8 +31,8 @@ const server = http.createServer(app);
 async function start() {
   await getWorker(); // warm up mediasoup worker before accepting connections
   setupWebSocket(server);
-  server.listen(5000, "0.0.0.0", () => {
-    console.log("Server running on port 5000");
+  server.listen(5001, "0.0.0.0", () => {
+    console.log("Server running on port 5001");
   });
 }
 

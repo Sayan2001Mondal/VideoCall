@@ -39,7 +39,7 @@ module.exports = {
       },
       {
         ip: "0.0.0.0",
-        announcedIp: "192.168.0.166", // REQUIRED for users on the same local network
+        announcedIp: "192.168.31.152", // REQUIRED for users on the same local network
       },
       {
         ip: "127.0.0.1",

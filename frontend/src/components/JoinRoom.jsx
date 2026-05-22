@@ -63,7 +63,7 @@ export default function JoinRoom({
   });
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-primary-50 via-surface-100 to-primary-50/50">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-surface-100 via-surface-100 to-primary-900/20">
       {/* Background decoration */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-96 h-96 bg-primary-200/30 rounded-full blur-3xl" />
@@ -77,9 +77,9 @@ export default function JoinRoom({
       >
         <div className="flex flex-col md:flex-row">
           {/* ── LEFT: Camera Preview ──────────────────────── */}
-          <div className="md:w-1/2 p-6 flex flex-col items-center justify-center gap-4 bg-surface-200/50">
+          <div className="md:w-1/2 p-6 flex flex-col items-center justify-center gap-4 bg-black/20">
             {/* Video preview container */}
-            <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-surface-300 shadow-inner">
+            <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-surface-300 shadow-inner ring-1 ring-white/10">
               {hasPermission === true && camOn ? (
                 <video
                   ref={previewVideoRef}
@@ -186,7 +186,7 @@ export default function JoinRoom({
               onClick={onJoin}
               disabled={!canJoin}
               size="lg"
-              className="w-full text-base"
+              className="w-full text-base font-bold shadow-lg shadow-primary-500/20"
             >
               {canJoin ? "Join Now" : "Fill in details to join"}
             </Button>

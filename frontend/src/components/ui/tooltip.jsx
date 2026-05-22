@@ -21,7 +21,7 @@ const Tooltip = React.forwardRef(
         <div
           className={cn(
             "absolute left-1/2 -translate-x-1/2 px-2 py-1 rounded-lg text-xs font-medium",
-            "bg-text-primary text-white whitespace-nowrap",
+            "bg-surface-300 text-text-primary whitespace-nowrap",
             "opacity-0 group-hover:opacity-100 pointer-events-none",
             "transition-opacity duration-200 z-50",
             "shadow-lg",
@@ -34,7 +34,7 @@ const Tooltip = React.forwardRef(
           {/* Arrow */}
           <div
             className={cn(
-              "absolute left-1/2 -translate-x-1/2 w-2 h-2 bg-text-primary rotate-45",
+              "absolute left-1/2 -translate-x-1/2 w-2 h-2 bg-surface-300 rotate-45",
               side === "top" && "top-full -mt-1",
               side === "bottom" && "bottom-full -mb-1"
             )}

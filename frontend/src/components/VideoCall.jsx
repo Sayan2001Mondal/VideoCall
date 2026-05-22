@@ -221,7 +221,7 @@ export default function VideoCall({
         </div>
       )}
       {/* ── TOP BAR ──────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 py-2 bg-white/80 backdrop-blur-sm border-b border-border z-20">
+      <div className="flex items-center justify-between px-4 py-3 bg-surface-200/80 backdrop-blur-md border-b border-border/80 z-20">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-bold">
             <span className="text-primary-500">Meet</span>
@@ -232,7 +232,7 @@ export default function VideoCall({
         <div className="flex items-center gap-2">
           <button
             onClick={copyRoomId}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-200 hover:bg-surface-300
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-100 hover:bg-surface-300
                        text-sm text-text-secondary hover:text-text-primary transition-colors cursor-pointer"
             title="Copy room ID"
           >
@@ -256,7 +256,7 @@ export default function VideoCall({
         {/* Video Area */}
         <div className="flex-1 flex transition-all duration-300">
           {isFocusedMode ? (
-            <div className="flex-1 flex flex-col md:flex-row gap-2 p-2 h-full overflow-hidden">
+            <div className="flex-1 flex flex-col md:flex-row gap-2 p-2 pb-24 md:pb-28 h-full overflow-hidden">
               {/* Main Focused Tile */}
               <div className="flex-1 bg-surface-200 rounded-2xl overflow-hidden relative border border-border/50">
                 {(() => {
@@ -270,7 +270,7 @@ export default function VideoCall({
               </div>
             </div>
           ) : isScreenShareMode ? (
-            <div className="flex-1 flex flex-col md:flex-row gap-2 p-2 h-full overflow-hidden">
+            <div className="flex-1 flex flex-col md:flex-row gap-2 p-2 pb-24 md:pb-28 h-full overflow-hidden">
               <div className="flex-1 bg-surface-200 rounded-2xl overflow-hidden relative border border-border/50">
                 {renderTile(allScreenShares[0])}
               </div>
@@ -280,7 +280,7 @@ export default function VideoCall({
               </div>
             </div>
           ) : (
-            <div className={`flex-1 grid ${getGridClass()} ${getRowsClass()} gap-2 p-2 h-full`}>
+            <div className={`flex-1 grid ${getGridClass()} ${getRowsClass()} gap-2 p-2 pb-24 md:pb-28 h-full`}>
               {allParticipants.map(p => renderTile(p))}
               {allScreenShares.map(s => renderTile(s))}
             </div>

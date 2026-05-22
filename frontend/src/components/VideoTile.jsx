@@ -20,20 +20,28 @@ export default function VideoTile({
 
   useEffect(() => {
     if (!videoRef.current || !stream) return;
-    videoRef.current.srcObject = stream;
+    const video = videoRef.current;
+    video.srcObject = stream;
+    video.muted = isLocal || isMuted;
+
     const playVideo = async () => {
-      try { await videoRef.current?.play(); } catch {}
+      try {
+        await video.play();
+      } catch {
+        video.muted = true;
+        try { await video.play(); } catch {}
+      }
     };
-    videoRef.current.onloadedmetadata = playVideo;
+    video.onloadedmetadata = playVideo;
     playVideo();
-  }, [stream, isCameraOff]);
+  }, [stream, isCameraOff, isLocal, isMuted]);
 
   return (
     <div
       onClick={onClick}
       className={cn(
-        "relative rounded-2xl overflow-hidden bg-surface-200 border border-border/50 cursor-pointer",
-        isSpeaking && "ring-2 ring-primary-400 animate-[speaking-glow_1.5s_ease-in-out_infinite]",
+        "relative rounded-2xl overflow-hidden bg-surface-300 border border-white/10 cursor-pointer",
+        isSpeaking && "ring-4 ring-primary-500 animate-[speaking-glow_1.5s_ease-in-out_infinite]",
         className
       )}
     >
@@ -50,15 +58,15 @@ export default function VideoTile({
           )}
         />
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-surface-200 to-surface-300">
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-surface-200 to-surface-100">
           <Avatar name={name} size="lg" />
         </div>
       )}
 
       {/* Name label */}
-      <div className="absolute bottom-2 left-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/50 backdrop-blur-sm text-xs text-white">
+      <div className="absolute bottom-3 left-3 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md text-xs text-white border border-white/10">
         {isMuted && <MicOff size={12} className="text-red-400" />}
-        <span className="truncate max-w-[120px]">
+        <span className="truncate max-w-[120px] font-medium">
           {isLocal ? "You" : name || "Participant"}
         </span>
       </div>

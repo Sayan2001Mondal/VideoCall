@@ -42,7 +42,7 @@ export default function LabeledInput({
   const hasSuffix = !!suffix;
 
   const baseInputClass = cn(
-    "w-full px-3 py-2 text-sm border rounded-xl bg-white text-text-primary",
+    "w-full px-3 py-2 text-sm border rounded-xl bg-surface-100 text-text-primary",
     "placeholder:text-text-muted",
     "focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200",
     errorMessage
@@ -86,7 +86,7 @@ export default function LabeledInput({
           disabled={disabled}
           rows={rows}
           className={cn(
-            "w-full px-3 py-2 text-sm border rounded-xl bg-white resize-none",
+            "w-full px-3 py-2 text-sm border rounded-xl bg-surface-100 resize-none",
             "focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200",
             "text-text-primary placeholder:text-text-muted",
             errorMessage
@@ -106,7 +106,7 @@ export default function LabeledInput({
           required={required}
           disabled={disabled}
           className={cn(
-            "w-full px-3 py-2 text-sm border rounded-xl bg-white",
+            "w-full px-3 py-2 text-sm border rounded-xl bg-surface-100",
             "focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200",
             "text-text-primary",
             errorMessage

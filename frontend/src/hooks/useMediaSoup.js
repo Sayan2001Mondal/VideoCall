@@ -256,6 +256,18 @@ export default function useMediaSoup(ws, roomId, peerId, name, existingStreamRef
             });
 
             consumersRef.current[consumer.id] = consumer;
+
+            send({
+              type: "resumeConsumer",
+              roomId,
+              peerId,
+              consumerId: consumer.id,
+            });
+            await waitForSocketMessage(
+              (payload) =>
+                payload.type === "consumerResumed" &&
+                payload.consumerId === consumer.id
+            );
             await consumer.resume?.();
 
             const streamKey = isScreenShare ? `${sourcePeerId}-screen` : sourcePeerId;

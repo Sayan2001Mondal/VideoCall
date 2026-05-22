@@ -4,44 +4,44 @@
    THEME — Light Indigo/Violet
    ──────────────────────────────────────────────────────────────── */
 @theme {
-  /* Primary indigo palette */
-  --color-primary-50: #EEF2FF;
-  --color-primary-100: #E0E7FF;
-  --color-primary-200: #C7D2FE;
-  --color-primary-300: #A5B4FC;
-  --color-primary-400: #818CF8;
-  --color-primary-500: #6366F1;
-  --color-primary-600: #4F46E5;
-  --color-primary-700: #4338CA;
-  --color-primary-800: #3730A3;
-  --color-primary-900: #312E81;
+  /* Primary Electric Violet palette */
+  --color-primary-50: #F5F3FF;
+  --color-primary-100: #EDE9FE;
+  --color-primary-200: #C4B5FD;
+  --color-primary-300: #A78BFA;
+  --color-primary-400: #8B5CF6;
+  --color-primary-500: #7C3AED;
+  --color-primary-600: #6D28D9;
+  --color-primary-700: #5B21B6;
+  --color-primary-800: #4C1D95;
+  --color-primary-900: #431C8E;
 
-  /* Surface / background colors (light, clean) */
-  --color-surface-50: #FFFFFF;
-  --color-surface-100: #F9FAFB;
-  --color-surface-200: #F3F4F6;
-  --color-surface-300: #E5E7EB;
-  --color-surface-400: #D1D5DB;
-  --color-surface-500: #9CA3AF;
-  --color-surface-600: #6B7280;
+  /* Deep Midnight surface colors */
+  --color-surface-50: #1E293B;
+  --color-surface-100: #0F172A; /* Deepest background */
+  --color-surface-200: #1E293B; /* Card surface */
+  --color-surface-300: #334155; /* Border / Muted surface */
+  --color-surface-400: #475569; /* Hover state */
+  --color-surface-500: #64748B;
+  --color-surface-600: #94A3B8;
 
   /* Semantic */
   --color-danger: #EF4444;
   --color-danger-hover: #DC2626;
   --color-success: #10B981;
-  --color-success-light: #D1FAE5;
+  --color-success-light: #064E3B;
   --color-warning: #F59E0B;
-  --color-warning-light: #FEF3C7;
+  --color-warning-light: #78350F;
 
   /* Text colors */
-  --color-text-primary: #0F172A;
-  --color-text-secondary: #475569;
-  --color-text-muted: #94A3B8;
-  --color-text-inverse: #FFFFFF;
+  --color-text-primary: #F8FAFC;
+  --color-text-secondary: #CBD5E1;
+  --color-text-muted: #64748B;
+  --color-text-inverse: #0F172A;
 
   /* Border */
-  --color-border: #E2E8F0;
-  --color-border-hover: #CBD5E1;
+  --color-border: #334155;
+  --color-border-hover: #475569;
 
   /* Fonts */
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;

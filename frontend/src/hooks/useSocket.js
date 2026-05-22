@@ -1,5 +1,23 @@
 import { useEffect, useRef } from "react";
 
+function getSocketUrl() {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+
+  const { hostname } = window.location;
+  const isLocal =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname.startsWith("192.168.") ||
+    hostname.startsWith("10.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname);
+
+  if (isLocal) {
+    return `ws://${hostname}:5001/ws/test`;
+  }
+
+  return "wss://sayanexpress.superfastmind.com/ws/test";
+}
+
 /**
  * useSocket — manages the WebSocket connection with auto-reconnect.
  *
@@ -34,9 +52,7 @@ export default function useSocket(onMessage, setConnected) {
 
       console.log(`[WS] Connecting... (attempt ${retryCount.current + 1})`);
 
-      const socket = new WebSocket(
-        "wss://sayanexpress.superfastmind.com/ws/test"
-      );
+      const socket = new WebSocket(getSocketUrl());
 
       socket.onopen = () => {
         console.log("[WS] Connected");

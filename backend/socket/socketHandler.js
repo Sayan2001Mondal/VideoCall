@@ -397,12 +397,28 @@ function socketHandler(ws) {
     rtpParameters: consumer.rtpParameters,
   });
 
-  // Resume after sending to client
-  await consumer.resume();
-  logInfo("Consumer resumed", { roomId, peerId, producerId, consumerId: consumer.id });
-
   break;
 }
+
+        case "resumeConsumer": {
+          const { roomId, peerId, consumerId } = data;
+          const peer = getPeer(roomId, peerId);
+          const consumer = peer?.consumers[consumerId];
+          if (!consumer) {
+            logWarn("resumeConsumer failed: consumer not found", { roomId, peerId, consumerId });
+            return;
+          }
+
+          await consumer.resume();
+          send(ws, { type: "consumerResumed", consumerId });
+          logInfo("Consumer resumed", {
+            roomId,
+            peerId,
+            producerId: consumer.producerId,
+            consumerId,
+          });
+          break;
+        }
 
         // ─── CONSUME DATA ───────────────────────────────────────
         case "consumeData": {
