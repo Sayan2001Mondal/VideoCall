@@ -1,10 +1,14 @@
+require("dotenv").config();   
+
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const setupWebSocket = require("./config/websocket");
 const { getWorker } = require("./config/mediasoupWorker");
+const { createGeneratedRoom } = require("./socket/roomManager");
 
 const app = express();
+app.use(express.json());
 
 const allowedOrigins = [
   "http://localhost:3000",
@@ -25,6 +29,20 @@ app.use(
     credentials: true,
   })
 );
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.post("/rooms", async (_req, res) => {
+  try {
+    const roomId = await createGeneratedRoom();
+    res.status(201).json({ roomId });
+  } catch (error) {
+    console.error("[rooms] Failed to create room", { error: error.message });
+    res.status(500).json({ error: "Failed to create room" });
+  }
+});
 
 const server = http.createServer(app);
 

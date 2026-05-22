@@ -1,5 +1,4 @@
 const {
-  getOrCreateRoom,
   addPeer,
   markPeerDisconnected,
   removePeer,
@@ -7,6 +6,7 @@ const {
   getPeer,
   getRoom,
   getOtherPeers,
+  createGeneratedRoom,
   RECONNECT_GRACE_MS,
 } = require("./roomManager");
 const config = require("../config/mediasoup");
@@ -35,56 +35,144 @@ function broadcast(roomId, peerId, data) {
   });
 }
 
+// ─── VALIDATION HELPERS ─────────────────────────────────────────────────────
+
+const MAX_MSG_BYTES = 10 * 1024;
+const RATE_LIMIT_WINDOW_MS = 1000;
+const RATE_LIMIT_MAX_MESSAGES = 20;
+const ROOM_ID_REGEX = /^[a-z]{4}-[a-z]{4}-[a-z]{4}$/;
+
+
+function assertStr(val, field, maxLen = 128) {
+  if (typeof val !== "string" || val.trim().length === 0 || val.length > maxLen) {
+    throw new ValidationError(`Invalid field "${field}": must be a non-empty string ≤${maxLen} chars`);
+  }
+}
+
+function assertRoomId(val) {
+  assertStr(val, "roomId");
+  if (!ROOM_ID_REGEX.test(val)) {
+    throw new ValidationError('Invalid field "roomId": must match format "abcd-efgh-ijkl"');
+  }
+}
+
+function assertEnum(val, field, options) {
+  if (!options.includes(val)) {
+    throw new ValidationError(`Invalid field "${field}": must be one of [${options.join(", ")}]`);
+  }
+}
+
+function assertObj(val, field) {
+  if (typeof val !== "object" || val === null || Array.isArray(val)) {
+    throw new ValidationError(`Invalid field "${field}": must be an object`);
+  }
+}
+
+function assertBool(val, field) {
+  if (typeof val !== "boolean") {
+    throw new ValidationError(`Invalid field "${field}": must be a boolean`);
+  }
+}
+
+class ValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ValidationError";
+  }
+}
+
+// ─── SOCKET HANDLER ─────────────────────────────────────────────────────────
+
 function socketHandler(ws) {
   let myRoomId = null;
   let myPeerId = null;
 
+  let lastWindowStart = Date.now();
+  let messageCount = 0;
+
   ws.on("message", async (raw) => {
-    const data = JSON.parse(raw);
+    // Rate limiting
+    const now = Date.now();
+    if (now - lastWindowStart > RATE_LIMIT_WINDOW_MS) {
+      lastWindowStart = now;
+      messageCount = 0;
+    }
+    messageCount++;
+    if (messageCount > RATE_LIMIT_MAX_MESSAGES) {
+      logWarn("Rate limit exceeded", { peerId: myPeerId });
+      return send(ws, { type: "error", message: "Rate limit exceeded. Please slow down." });
+    }
+
+    // Reject oversized messages before parsing
+    if (Buffer.byteLength(raw) > MAX_MSG_BYTES) {
+      logWarn("Message too large, closing connection");
+      return ws.close(1009, "Message too large");
+    }
+
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      logWarn("Invalid JSON received, closing connection");
+      return ws.close(1007, "Invalid JSON");
+    }
+
+    if (typeof data.type !== "string") {
+      logWarn("Message missing type field");
+      return;
+    }
 
     try {
       switch (data.type) {
 
         case "join": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          assertStr(data.name, "name", 64);
           const { roomId, peerId, name } = data;
           myRoomId = roomId;
           myPeerId = peerId;
 
-          let room = await getOrCreateRoom(roomId);
-          
-          // If the peer already exists (e.g. ungraceful disconnect where close didn't fire),
-          // clean them up first so other clients drop the frozen tracks.
+          let room = getRoom(roomId);
+          if (!room) {
+            send(ws, { type: "joinRejected", reason: "room-not-found" });
+            logWarn("Join rejected: room not found", { roomId, peerId });
+            return;
+          }
+
           if (room.peers[peerId]) {
             logInfo("Peer rejoining, cleaning up old state", { roomId, peerId });
             broadcast(roomId, peerId, { type: "peerLeft", peerId });
             removePeer(roomId, peerId);
-            
-            // Re-fetch room because removePeer deletes it if it becomes empty!
-            room = await getOrCreateRoom(roomId);
+            room = getRoom(roomId);
+            if (!room) {
+              send(ws, { type: "joinRejected", reason: "room-not-found" });
+              logWarn("Join rejected after stale peer cleanup", { roomId, peerId });
+              return;
+            }
           }
 
           addPeer(roomId, peerId, ws);
           room.peers[peerId].name = name;
           logInfo("Peer joined room", { roomId, peerId, name });
 
-          // Send RTP capabilities so client can create device
           send(ws, {
             type: "routerRtpCapabilities",
             rtpCapabilities: room.router.rtpCapabilities,
           });
 
-          // Tell existing peers a new user joined
           broadcast(roomId, peerId, {
             type: "peerJoined",
             peerId,
             name,
           });
-
-          // Send existing producers to the new peer is now handled by getProducers
           break;
         }
 
         case "resumePeer": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          if (data.name !== undefined) assertStr(data.name, "name", 64);
           const { roomId, peerId, name } = data;
           myRoomId = roomId;
           myPeerId = peerId;
@@ -111,13 +199,15 @@ function socketHandler(ws) {
 
         // ─── GET PRODUCERS ──────────────────────────────────────
         case "getProducers": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
           const { roomId, peerId } = data;
           const room = getRoom(roomId);
           if (!room) {
             logWarn("getProducers failed: room not found", { roomId, peerId });
             return;
           }
-          
+
           const existingProducers = [];
           const existingDataProducers = [];
           Object.entries(room.peers).forEach(([id, peer]) => {
@@ -160,6 +250,9 @@ function socketHandler(ws) {
 
         // ─── CREATE TRANSPORT ───────────────────────────────────
         case "createTransport": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          assertEnum(data.direction, "direction", ["send", "recv"]);
           const { roomId, peerId, direction } = data;
           const room = getRoom(roomId);
           if (!room) {
@@ -169,9 +262,9 @@ function socketHandler(ws) {
 
           const transport = await room.router.createWebRtcTransport({
             ...config.webRtcTransport,
-            appData: { direction }
+            appData: { direction },
           });
-          
+
           const peer = getPeer(roomId, peerId);
           if (!peer) {
             logWarn("createTransport failed: peer not found", { roomId, peerId, direction });
@@ -197,6 +290,10 @@ function socketHandler(ws) {
 
         // ─── CONNECT TRANSPORT ──────────────────────────────────
         case "connectTransport": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          assertStr(data.transportId, "transportId");
+          assertObj(data.dtlsParameters, "dtlsParameters");
           const { roomId, peerId, transportId, dtlsParameters } = data;
           const peer = getPeer(roomId, peerId);
           const transport = peer?.transports[transportId];
@@ -213,6 +310,9 @@ function socketHandler(ws) {
 
         // ─── RESTART ICE ────────────────────────────────────────
         case "restartIce": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          assertStr(data.transportId, "transportId");
           const { roomId, peerId, transportId } = data;
           const peer = getPeer(roomId, peerId);
           const transport = peer?.transports[transportId];
@@ -233,6 +333,12 @@ function socketHandler(ws) {
 
         // ─── PRODUCE ────────────────────────────────────────────
         case "produce": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          assertStr(data.transportId, "transportId");
+          assertEnum(data.kind, "kind", ["audio", "video"]);
+          assertObj(data.rtpParameters, "rtpParameters");
+          if (data.isScreenShare !== undefined) assertBool(data.isScreenShare, "isScreenShare");
           const { roomId, peerId, transportId, kind, rtpParameters, isScreenShare } = data;
           const peer = getPeer(roomId, peerId);
           const transport = peer?.transports[transportId];
@@ -263,7 +369,6 @@ function socketHandler(ws) {
 
           send(ws, { type: "produced", producerId: producer.id, kind });
 
-          // Notify others so they can consume
           broadcast(roomId, peerId, {
             type: "newProducer",
             producerId: producer.id,
@@ -274,17 +379,33 @@ function socketHandler(ws) {
           });
           break;
         }
+        //Generate-Room
+        case "generateRoom": {
+  try {
+    const roomId = await createGeneratedRoom();
+
+    send(ws, {
+      type: "roomGenerated",
+      roomId,
+    });
+  } catch (err) {
+    send(ws, {
+      type: "error",
+      message: "Room generation failed",
+    });
+  }
+  break;
+}
 
         // ─── PRODUCE DATA ───────────────────────────────────────
         case "produceData": {
-          const {
-            roomId,
-            peerId,
-            transportId,
-            sctpStreamParameters,
-            label,
-            protocol,
-          } = data;
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          assertStr(data.transportId, "transportId");
+          assertObj(data.sctpStreamParameters, "sctpStreamParameters");
+          assertStr(data.label, "label", 256);
+          if (data.protocol !== undefined) assertStr(data.protocol, "protocol", 64);
+          const { roomId, peerId, transportId, sctpStreamParameters, label, protocol } = data;
           const peer = getPeer(roomId, peerId);
           const transport = peer?.transports[transportId];
           if (!transport) {
@@ -333,79 +454,72 @@ function socketHandler(ws) {
 
         // ─── CONSUME ────────────────────────────────────────────
         case "consume": {
-  const { roomId, peerId, producerId, rtpCapabilities } = data;
+  assertRoomId(data.roomId);
+  assertStr(data.peerId, "peerId");
+          assertStr(data.producerId, "producerId");
+          assertObj(data.rtpCapabilities, "rtpCapabilities");
+          const { roomId, peerId, producerId, rtpCapabilities } = data;
 
-  const room = getRoom(roomId);
+          const room = getRoom(roomId);
+          if (!room) {
+            logWarn("consume failed: room not found", { roomId, peerId, producerId });
+            return;
+          }
 
-  if (!room) {
-    logWarn("consume failed: room not found", { roomId, peerId, producerId });
-    return;
-  }
+          const peer = getPeer(roomId, peerId);
+          if (!peer) {
+            logWarn("consume failed: peer not found", { roomId, peerId, producerId });
+            return;
+          }
 
-  const peer = getPeer(roomId, peerId);
+          const recvTransport = Object.values(peer.transports).find(
+            (t) => t.appData && t.appData.direction === "recv"
+          );
+          if (!recvTransport) {
+            logWarn("consume failed: recv transport not found", { roomId, peerId, producerId });
+            return;
+          }
 
-  if (!peer) {
-    logWarn("consume failed: peer not found", { roomId, peerId, producerId });
-    return;
-  }
-  // Find recv transport
-  const recvTransport = Object.values(peer.transports).find(
-    (t) => t.appData && t.appData.direction === "recv"
-  );
+          if (!room.router.canConsume({ producerId, rtpCapabilities })) {
+            logWarn("consume failed: router cannot consume producer", { roomId, peerId, producerId });
+            return;
+          }
 
-  if (!recvTransport) {
-    logWarn("consume failed: recv transport not found", { roomId, peerId, producerId });
-    return;
-  }
+          logInfo("Creating consumer", { roomId, peerId, producerId });
 
-  // Check consume capability
-  if (
-    !room.router.canConsume({
-      producerId,
-      rtpCapabilities,
-    })
-  ) {
-    logWarn("consume failed: router cannot consume producer", { roomId, peerId, producerId });
-    return;
-  }
+          const consumer = await recvTransport.consume({
+            producerId,
+            rtpCapabilities,
+            paused: true,
+          });
 
-  logInfo("Creating consumer", { roomId, peerId, producerId });
+          peer.consumers[consumer.id] = consumer;
+          logInfo("Consumer created", {
+            roomId,
+            peerId,
+            producerId,
+            consumerId: consumer.id,
+            kind: consumer.kind,
+          });
 
-  // Create consumer PAUSED first
-  const consumer = await recvTransport.consume({
-    producerId,
-    rtpCapabilities,
-    paused: true,
-  });
+          send(ws, {
+            type: "consumed",
+            consumerId: consumer.id,
+            producerId,
+            kind: consumer.kind,
+            rtpParameters: consumer.rtpParameters,
+          });
 
-  // Save consumer
-  peer.consumers[consumer.id] = consumer;
-  logInfo("Consumer created", {
-    roomId,
-    peerId,
-    producerId,
-    consumerId: consumer.id,
-    kind: consumer.kind,
-  });
-
-  // Send consumer params to client
-  send(ws, {
-    type: "consumed",
-    consumerId: consumer.id,
-    producerId,
-    kind: consumer.kind,
-    rtpParameters: consumer.rtpParameters,
-  });
-
-  // Resume after sending to client
-  await consumer.resume();
-  logInfo("Consumer resumed", { roomId, peerId, producerId, consumerId: consumer.id });
-
-  break;
-}
+          await consumer.resume();
+          logInfo("Consumer resumed", { roomId, peerId, producerId, consumerId: consumer.id });
+          break;
+        }
 
         // ─── CONSUME DATA ───────────────────────────────────────
         case "consumeData": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          assertStr(data.dataProducerId, "dataProducerId");
           const { roomId, peerId, dataProducerId } = data;
           const peer = getPeer(roomId, peerId);
           if (!peer) {
@@ -416,7 +530,6 @@ function socketHandler(ws) {
           const recvTransport = Object.values(peer.transports).find(
             (transport) => transport.appData && transport.appData.direction === "recv"
           );
-
           if (!recvTransport) {
             logWarn("consumeData failed: recv transport not found", { roomId, peerId, dataProducerId });
             return;
@@ -446,6 +559,9 @@ function socketHandler(ws) {
 
         // ─── CHAT MESSAGE ────────────────────────────────────────
         case "chat": {
+          assertRoomId(data.roomId);
+          assertStr(data.message, "message", 2048);
+          assertStr(data.sender, "sender", 64);
           const { roomId, message, sender } = data;
           const room = getRoom(roomId);
           if (!room) {
@@ -453,39 +569,31 @@ function socketHandler(ws) {
             return;
           }
 
-          broadcast(roomId, undefined, {
-            type: "chat",
-            message,
-            sender,
-          });
+          broadcast(roomId, undefined, { type: "chat", message, sender });
           logInfo("Chat broadcasted", { roomId, sender, messageLength: String(message || "").length });
           break;
         }
 
         // ─── SCREEN SHARE STOPPED ────────────────────────────────
         case "screenShareStopped": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
           const { roomId, peerId } = data;
-          broadcast(roomId, peerId, {
-            type: "screenShareStopped",
-            peerId,
-          });
+          broadcast(roomId, peerId, { type: "screenShareStopped", peerId });
           logInfo("Screen share stopped", { roomId, peerId });
           break;
         }
 
         case "mediaToggled": {
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
+          assertEnum(data.kind, "kind", ["audio", "video"]);
+          assertBool(data.enabled, "enabled");
           const { roomId, peerId, kind, enabled } = data;
-          broadcast(roomId, peerId, {
-            type: "mediaToggled",
-            peerId,
-            kind,
-            enabled,
-          });
+          broadcast(roomId, peerId, { type: "mediaToggled", peerId, kind, enabled });
           logInfo("Media toggled", { roomId, peerId, kind, enabled });
           break;
         }
-
-
 
         // ─── LEAVE ──────────────────────────────────────────────
         case "leave": {
@@ -504,6 +612,14 @@ function socketHandler(ws) {
         }
       }
     } catch (err) {
+      if (err instanceof ValidationError) {
+        logWarn(`Validation failed [${data.type}]: ${err.message}`, {
+          roomId: data.roomId,
+          peerId: data.peerId,
+        });
+        send(ws, { type: "error", message: err.message });
+        return;
+      }
       logError(`Error handling [${data.type}]`, {
         roomId: data.roomId,
         peerId: data.peerId,
@@ -531,7 +647,10 @@ function socketHandler(ws) {
           graceMs: RECONNECT_GRACE_MS,
         });
       } else {
-        logInfo("Old socket disconnected, skipping cleanup as peer reconnected", { roomId: myRoomId, peerId: myPeerId });
+        logInfo("Old socket disconnected, skipping cleanup as peer reconnected", {
+          roomId: myRoomId,
+          peerId: myPeerId,
+        });
       }
     } else {
       logInfo("Socket disconnected before room join");

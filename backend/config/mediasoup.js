@@ -54,9 +54,9 @@ module.exports = {
   turn: {                                                                                                                 
          iceServers: [                                                                                                         
            {                                                                                                                   
-             urls: "turn:turn.viksun.net:3478?transport=tcp",                                                                    
-             username: "dcsusers",                                                                                        
-             credential: "volini12",                                                                                      
+             urls: process.env.TURN_URL,                                                              
+             username: process.env.TURN_USERNAME,                                                                                        
+             credential: process.env.TURN_CREDENTIAL,                                                                                      
            },                                                                                                                  
          ],                                                                                                                    
         }, 

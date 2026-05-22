@@ -15,6 +15,37 @@ async function getOrCreateRoom(roomId) {
   return rooms[roomId];
 }
 
+function roomExists(roomId) {
+  return Boolean(rooms[roomId]);
+}
+
+function generateRoomId() {
+  const chars = "abcdefghijklmnopqrstuvwxyz";
+  const segments = [];
+
+  for (let s = 0; s < 3; s += 1) {
+    let segment = "";
+    for (let i = 0; i < 4; i += 1) {
+      segment += chars[Math.floor(Math.random() * chars.length)];
+    }
+    segments.push(segment);
+  }
+
+  return segments.join("-");
+}
+
+async function createGeneratedRoom(maxAttempts = 10) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const roomId = generateRoomId();
+    if (roomExists(roomId)) continue;
+
+    await getOrCreateRoom(roomId);
+    return roomId;
+  }
+
+  throw new Error("Failed to generate a unique room ID");
+}
+
 function addPeer(roomId, peerId, ws) {
   if (rooms[roomId]) {
     rooms[roomId].peers[peerId] = {
@@ -100,6 +131,8 @@ function getOtherPeers(roomId, peerId) {
 
 module.exports = {
   getOrCreateRoom,
+  roomExists,
+  createGeneratedRoom,
   addPeer,
   markPeerDisconnected,
   removePeer,
