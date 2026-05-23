@@ -27,6 +27,14 @@ function logError(message, meta = {}) {
   console.error(`[socket] ${message}`, meta);
 }
 
+function sendJoinRejected(ws, reason, extra = {}) {
+  send(ws, {
+    type: "joinRejected",
+    reason,
+    ...extra,
+  });
+}
+
 function broadcast(roomId, peerId, data) {
   const room = getRoom(roomId);
   if (!room) return;
@@ -75,9 +83,10 @@ function assertBool(val, field) {
 }
 
 class ValidationError extends Error {
-  constructor(message) {
+  constructor(message, details = {}) {
     super(message);
     this.name = "ValidationError";
+    this.details = details;
   }
 }
 
@@ -126,7 +135,23 @@ function socketHandler(ws) {
       switch (data.type) {
 
         case "join": {
-          assertRoomId(data.roomId);
+          try {
+            assertRoomId(data.roomId);
+          } catch (err) {
+            if (err instanceof ValidationError) {
+              sendJoinRejected(ws, "invalid-room-id", {
+                message: err.message,
+                field: "roomId",
+                expectedFormat: "abcd-efgh-ijkl",
+              });
+              logWarn("Join rejected: invalid room ID format", {
+                roomId: data.roomId,
+                peerId: data.peerId,
+              });
+              return;
+            }
+            throw err;
+          }
           assertStr(data.peerId, "peerId");
           assertStr(data.name, "name", 64);
           const { roomId, peerId, name } = data;
@@ -135,7 +160,10 @@ function socketHandler(ws) {
 
           let room = getRoom(roomId);
           if (!room) {
-            send(ws, { type: "joinRejected", reason: "room-not-found" });
+            sendJoinRejected(ws, "room-not-found", {
+              message: "Room not found",
+              field: "roomId",
+            });
             logWarn("Join rejected: room not found", { roomId, peerId });
             return;
           }
@@ -146,7 +174,10 @@ function socketHandler(ws) {
             removePeer(roomId, peerId);
             room = getRoom(roomId);
             if (!room) {
-              send(ws, { type: "joinRejected", reason: "room-not-found" });
+              sendJoinRejected(ws, "room-not-found", {
+                message: "Room not found",
+                field: "roomId",
+              });
               logWarn("Join rejected after stale peer cleanup", { roomId, peerId });
               return;
             }
@@ -381,21 +412,23 @@ function socketHandler(ws) {
         }
         //Generate-Room
         case "generateRoom": {
-  try {
-    const roomId = await createGeneratedRoom();
+          try {
+            const roomId = await createGeneratedRoom();
 
-    send(ws, {
-      type: "roomGenerated",
-      roomId,
-    });
-  } catch (err) {
-    send(ws, {
-      type: "error",
-      message: "Room generation failed",
-    });
-  }
-  break;
-}
+            send(ws, {
+              type: "roomGenerated",
+              roomId,
+            });
+          } catch (err) {
+            send(ws, {
+              type: "error",
+              message: "Room generation failed",
+            });
+          }
+          break;
+        }
+
+
 
         // ─── PRODUCE DATA ───────────────────────────────────────
         case "produceData": {
@@ -454,8 +487,8 @@ function socketHandler(ws) {
 
         // ─── CONSUME ────────────────────────────────────────────
         case "consume": {
-  assertRoomId(data.roomId);
-  assertStr(data.peerId, "peerId");
+          assertRoomId(data.roomId);
+          assertStr(data.peerId, "peerId");
           assertStr(data.producerId, "producerId");
           assertObj(data.rtpCapabilities, "rtpCapabilities");
           const { roomId, peerId, producerId, rtpCapabilities } = data;
