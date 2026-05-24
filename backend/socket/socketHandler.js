@@ -384,6 +384,24 @@ function socketHandler(ws) {
             return;
           }
 
+          if (isScreenShare) {
+            const room = getRoom(roomId);
+            if (room) {
+              const otherHasScreenShare = Object.entries(room.peers).some(([id, p]) => {
+                if (id === peerId) return false;
+                return Object.values(p.producers).some((prod) => prod.appData?.isScreenShare === true);
+              });
+              if (otherHasScreenShare) {
+                logWarn("produce screen share rejected: already sharing in room", { roomId, peerId });
+                send(ws, {
+                  type: "screenShareRejected",
+                  message: "Someone else is already sharing their screen. Only one person can share their screen at a time.",
+                });
+                return;
+              }
+            }
+          }
+
           const producer = await transport.produce({
             kind,
             rtpParameters,
@@ -612,6 +630,22 @@ function socketHandler(ws) {
           assertRoomId(data.roomId);
           assertStr(data.peerId, "peerId");
           const { roomId, peerId } = data;
+
+          const peer = getPeer(roomId, peerId);
+          if (peer) {
+            Object.entries(peer.producers).forEach(([id, producer]) => {
+              if (producer.appData?.isScreenShare) {
+                try {
+                  producer.close();
+                } catch (err) {
+                  logWarn("Error closing screen share producer on server", { id, error: err.message });
+                }
+                delete peer.producers[id];
+                logInfo("Closed server-side screen share producer", { roomId, peerId, producerId: id });
+              }
+            });
+          }
+
           broadcast(roomId, peerId, { type: "screenShareStopped", peerId });
           logInfo("Screen share stopped", { roomId, peerId });
           break;

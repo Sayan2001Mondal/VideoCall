@@ -54,4 +54,4 @@ async function start() {
   });
 }
 
-start();
+start(); // triggered nodemon restart
