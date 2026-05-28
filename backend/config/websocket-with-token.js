@@ -1,7 +1,6 @@
 const { WebSocketServer } = require("ws");
-const { PrismaClient } = require("../generated/prisma");
+const jwt = require("jsonwebtoken");
 
-const prisma = new PrismaClient();
 const socketHandler = require("../socket/socketHandler");
 
 function setupWebSocket(server) {
@@ -9,13 +8,12 @@ function setupWebSocket(server) {
     server,
     path: "/ws/test",
 
-    verifyClient: async ({ origin, req }, cb) => {
+    verifyClient: ({ origin, req }, cb) => {
       console.log("[WS] origin:", origin);
 
       const allowed = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
         "https://sayan.superfastmind.com",
+        "http://localhost:3000",
         "https://sayanexpress.superfastmind.com",
       ];
 
@@ -40,32 +38,23 @@ function setupWebSocket(server) {
           return;
         }
 
-       
-        const dbToken = await prisma.authToken.findUnique({
-          where: { token },
-        });
+        // Verify JWT
+        const decoded = jwt.verify(
+          token,
+          process.env.JWT_SECRET
+        );
 
-        if (!dbToken) {
-          console.warn("[WS] Invalid token");
+        // Attach user data to request
+        req.user = decoded;
 
-          cb(false, 401, "Invalid token");
-          return;
-        }
-
-        // Attach authenticated user/session context
-        req.user = {
-          tokenId: dbToken.id,
-          token: dbToken.token
-        };
-
-        console.log("[WS] Authenticated:", req.user);
+        console.log("[WS] Authenticated:", decoded);
 
         cb(true);
 
       } catch (err) {
-        console.error("[WS] Auth execution error:", err);
+        console.error("[WS] Invalid token:", err.message);
 
-        cb(false, 500, "Internal Server Error");
+        cb(false, 401, "Invalid token");
       }
     },
   });
@@ -73,6 +62,7 @@ function setupWebSocket(server) {
   wss.on("connection", (ws, req) => {
     console.log("[socket] Client connected to /ws/test");
 
+    // Attach authenticated user
     ws.user = req.user;
 
     socketHandler(ws, req);
