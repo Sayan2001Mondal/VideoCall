@@ -35,7 +35,7 @@ module.exports = {
     listenIps: [
       {
         ip: "0.0.0.0",
-        announcedIp: "72.60.220.252", // REQUIRED for users on different networks!
+        announcedIp: "72.60.220.252", // IP for express backend
       },
       {
         ip: "0.0.0.0",

@@ -17,6 +17,8 @@ function setupWebSocket(server) {
         "http://127.0.0.1:3000",
         "https://sayan.superfastmind.com",
         "https://sayanexpress.superfastmind.com",
+        "http://192.168.0.161:3000",
+        "https://sumit.superfastmind.com"
       ];
 
       // Origin validation
